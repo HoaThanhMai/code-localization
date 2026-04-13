@@ -1,0 +1,95 @@
+{
+  "name": "autosar-code-locator",
+  "displayName": "AUTOSAR Code Locator",
+  "description": "Find code by natural language description in AUTOSAR C/C++ codebase using GitNexus knowledge graph + Copilot",
+  "version": "0.1.0",
+  "publisher": "autosar-team",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "autosarLocator.openPanel",
+        "title": "Open Code Locator",
+        "category": "AUTOSAR"
+      },
+      {
+        "command": "autosarLocator.buildIndex",
+        "title": "Build GitNexus Index",
+        "category": "AUTOSAR"
+      },
+      {
+        "command": "autosarLocator.searchFromSelection",
+        "title": "Search Code for Selection",
+        "category": "AUTOSAR"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "autosarLocator.searchFromSelection",
+          "when": "editorHasSelection",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AUTOSAR Code Locator",
+      "properties": {
+        "autosarLocator.codebasePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the AUTOSAR codebase root"
+        },
+        "autosarLocator.preprocessedPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to macro-preprocessed codebase (auto-generated)"
+        },
+        "autosarLocator.gitnexusPath": {
+          "type": "string",
+          "default": "gitnexus",
+          "description": "Path to gitnexus CLI executable"
+        },
+        "autosarLocator.repoName": {
+          "type": "string",
+          "default": "",
+          "description": "GitNexus repo name (required when multiple repos are indexed). Leave empty to auto-detect from workspace folder name."
+        },
+        "autosarLocator.defaultModel": {
+          "type": "string",
+          "default": "gpt-4o",
+          "description": "Default Copilot model for analysis"
+        },
+        "autosarLocator.maxSequenceDepth": {
+          "type": "number",
+          "default": 8,
+          "description": "Max depth for execution sequence tracing"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.95.0",
+    "typescript": "^5.5.0"
+  },
+  "extensionDependencies": [
+    "github.copilot-chat"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  }
+}

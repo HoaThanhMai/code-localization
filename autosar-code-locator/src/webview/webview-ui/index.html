@@ -1,0 +1,1731 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';" />
+  <title>AUTOSAR Code Locator</title>
+  <style>
+    :root {
+      --bg: var(--vscode-editor-background);
+      --fg: var(--vscode-editor-foreground);
+      --border: var(--vscode-panel-border, #444);
+      --input-bg: var(--vscode-input-background);
+      --input-fg: var(--vscode-input-foreground);
+      --input-border: var(--vscode-input-border, #555);
+      --btn-bg: var(--vscode-button-background);
+      --btn-fg: var(--vscode-button-foreground);
+      --btn-hover: var(--vscode-button-hoverBackground);
+      --btn-secondary-bg: var(--vscode-button-secondaryBackground);
+      --btn-secondary-fg: var(--vscode-button-secondaryForeground);
+      --badge-bg: var(--vscode-badge-background);
+      --badge-fg: var(--vscode-badge-foreground);
+      --link: var(--vscode-textLink-foreground);
+      --error: var(--vscode-errorForeground, #f44);
+      --warning: var(--vscode-editorWarning-foreground, #fa0);
+      --success: #4caf50;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: var(--vscode-font-family); font-size: 13px; color: var(--fg); background: var(--bg); padding: 12px; }
+    h2 { font-size: 15px; margin-bottom: 8px; }
+    h3 { font-size: 13px; margin: 12px 0 6px; }
+
+    /* -- Status bar -- */
+    .status-bar {
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+    }
+    .status-header {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+    }
+    .status-dot {
+      width: 10px; height: 10px; border-radius: 50%; display: inline-block;
+    }
+    .status-dot.indexed { background: var(--success); }
+    .status-dot.not_indexed { background: #888; }
+    .status-dot.indexing { background: var(--warning); animation: pulse 1s infinite; }
+    .status-dot.stale { background: var(--warning); }
+    .status-dot.error { background: var(--error); }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .status-stats {
+      display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--vscode-descriptionForeground); margin-bottom: 6px;
+    }
+    .status-stats span { white-space: nowrap; }
+    .status-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .progress-bar {
+      height: 4px; background: var(--input-border); border-radius: 2px; margin: 8px 0; overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%; background: var(--btn-bg); transition: width 0.3s;
+    }
+    .progress-label { font-size: 11px; color: var(--vscode-descriptionForeground); }
+
+    /* -- Buttons -- */
+    button {
+      padding: 4px 12px; border: none; border-radius: 3px; cursor: pointer;
+      font-size: 12px; font-family: inherit;
+      background: var(--btn-bg); color: var(--btn-fg);
+    }
+    button:hover { background: var(--btn-hover); }
+    button.secondary { background: var(--btn-secondary-bg); color: var(--btn-secondary-fg); }
+    button:disabled { opacity: 0.5; cursor: default; }
+
+    /* -- Model selector -- */
+    .model-row {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+    }
+    select {
+      padding: 4px 8px; background: var(--input-bg); color: var(--input-fg);
+      border: 1px solid var(--input-border); border-radius: 3px; font-size: 12px; min-width: 200px;
+    }
+
+    /* -- Query area -- */
+    .query-section { margin-bottom: 12px; }
+    textarea {
+      width: 100%; min-height: 60px; padding: 8px; resize: vertical;
+      background: var(--input-bg); color: var(--input-fg);
+      border: 1px solid var(--input-border); border-radius: 3px;
+      font-family: inherit; font-size: 13px;
+    }
+    .query-type-row {
+      display: flex; align-items: center; gap: 16px; margin: 8px 0;
+    }
+    .query-type-row label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+    .query-actions { display: flex; gap: 6px; margin-top: 8px; }
+
+    /* -- Batch queue -- */
+    .batch-queue {
+      border: 1px solid var(--border); border-radius: 4px; padding: 8px; margin-top: 8px; max-height: 150px; overflow-y: auto;
+      display: none;
+    }
+    .batch-queue.visible { display: block; }
+    .batch-item {
+      display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 12px;
+    }
+    .batch-item .badge {
+      padding: 1px 6px; border-radius: 8px; font-size: 10px;
+      background: var(--badge-bg); color: var(--badge-fg);
+    }
+    .batch-item .badge.done { background: var(--success); color: #fff; }
+    .batch-item .badge.running { background: var(--warning); color: #000; }
+    .batch-item .badge.error { background: var(--error); color: #fff; }
+
+    /* -- Tabs -- */
+    .tabs {
+      display: flex; border-bottom: 1px solid var(--border); margin-bottom: 10px;
+    }
+    .tab {
+      padding: 6px 14px; cursor: pointer; font-size: 12px;
+      border-bottom: 2px solid transparent; color: var(--vscode-descriptionForeground);
+    }
+    .tab.active { border-bottom-color: var(--btn-bg); color: var(--fg); font-weight: 600; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* -- Results -- */
+    .results-section { border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; }
+    .results-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .results-count { font-size: 12px; color: var(--vscode-descriptionForeground); }
+
+    /* Sequences */
+    .sequence-card {
+      border: 1px solid var(--border); border-radius: 4px; margin-bottom: 10px; overflow: hidden;
+    }
+    .sequence-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 8px 12px; cursor: pointer; background: var(--vscode-sideBar-background, var(--input-bg));
+    }
+    .sequence-header:hover { opacity: 0.9; }
+    .sequence-title { font-weight: 600; }
+    .sequence-meta { font-size: 11px; color: var(--vscode-descriptionForeground); }
+    .sequence-body { padding: 8px 12px; display: none; }
+    .sequence-body.open { display: block; }
+
+    .step-row {
+      display: flex; align-items: flex-start; gap: 8px; padding: 4px 0;
+      border-left: 2px solid var(--border); padding-left: 12px; margin-left: 8px;
+    }
+    .step-row:last-child { border-left-color: transparent; }
+    .step-index {
+      min-width: 20px; text-align: center; font-weight: 700; font-size: 11px;
+      background: var(--badge-bg); color: var(--badge-fg); border-radius: 50%;
+      width: 20px; height: 20px; line-height: 20px; flex-shrink: 0;
+    }
+    .step-info { flex: 1; }
+    .step-symbol { font-weight: 600; }
+    .step-file { font-size: 11px; color: var(--vscode-descriptionForeground); }
+    .step-desc { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 2px; }
+    .file-link {
+      color: var(--link); cursor: pointer; text-decoration: none;
+    }
+    .file-link:hover { text-decoration: underline; }
+
+    /* Symbols table */
+    .symbol-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .symbol-table th {
+      text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border);
+      font-weight: 600; color: var(--vscode-descriptionForeground);
+    }
+    .symbol-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); }
+    .symbol-table tr:hover { background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.04)); }
+    .score-bar {
+      display: inline-block; height: 6px; border-radius: 3px; background: var(--btn-bg); min-width: 4px;
+    }
+
+    /* Investigation */
+    .suspect-card {
+      border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; margin-bottom: 8px;
+    }
+    .suspect-card.high { border-left: 3px solid var(--error); }
+    .suspect-card.medium { border-left: 3px solid var(--warning); }
+    .suspect-card.low { border-left: 3px solid var(--vscode-descriptionForeground); }
+    .suspect-severity {
+      font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 4px;
+    }
+    .suspect-severity.high { color: var(--error); }
+    .suspect-severity.medium { color: var(--warning); }
+    .suspect-severity.low { color: var(--vscode-descriptionForeground); }
+    .suspect-reason { margin: 4px 0; }
+    .suspect-action { font-size: 12px; color: var(--vscode-descriptionForeground); margin-top: 4px; }
+
+    .suggestion-list { list-style: none; }
+    .suggestion-list li { padding: 6px 0; border-bottom: 1px solid var(--border); }
+    .suggestion-list li:last-child { border-bottom: none; }
+    .suggestion-severity { font-weight: 700; margin-right: 4px; }
+    .suggestion-severity.HIGH { color: var(--error); }
+    .suggestion-severity.MEDIUM { color: var(--warning); }
+    .suggestion-severity.LOW { color: var(--vscode-descriptionForeground); }
+
+    .blast-radius { margin-top: 12px; }
+    .blast-item { padding: 2px 0; font-size: 12px; }
+
+    /* ============ Agent Trace ============ */
+    .agent-trace-body {
+      padding: 8px; border-radius: 6px; font-size: 12px; line-height: 1.6;
+      background: var(--vscode-editorWidget-background, var(--input-bg));
+    }
+    .agent-step {
+      margin-bottom: 10px; border-left: 3px solid var(--btn-bg); padding-left: 10px;
+      position: relative;
+    }
+    .agent-step:last-child { margin-bottom: 0; }
+    .agent-step-header {
+      display: flex; align-items: center; gap: 6px; font-weight: 600;
+      color: var(--link); margin-bottom: 4px;
+    }
+    .agent-step-header .iter-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 20px; height: 20px; border-radius: 50%;
+      background: var(--btn-bg); color: var(--btn-fg);
+      font-size: 10px; font-weight: 700; flex-shrink: 0;
+    }
+    .agent-step-reasoning {
+      color: var(--fg); margin-bottom: 6px;
+      padding: 4px 8px; border-radius: 4px;
+      background: var(--vscode-textBlockQuote-background, rgba(255,255,255,0.04));
+      border-left: 2px solid var(--vscode-textBlockQuote-border, #555);
+    }
+    .agent-tool-cards { display: flex; flex-direction: column; gap: 4px; }
+    .agent-tool-card {
+      border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+      background: var(--bg);
+    }
+    .agent-tool-card.has-error { border-color: var(--error); }
+    .agent-tool-header {
+      display: flex; align-items: center; gap: 6px; padding: 4px 8px;
+      background: var(--vscode-editorGroupHeader-tabsBackground, rgba(255,255,255,0.04));
+      cursor: pointer; user-select: none;
+    }
+    .agent-tool-header:hover { opacity: 0.85; }
+    .tool-icon {
+      font-size: 13px; width: 18px; text-align: center; flex-shrink: 0;
+    }
+    .tool-name {
+      font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px;
+    }
+    .tool-name.query { color: var(--link); }
+    .tool-name.context { color: #bb86fc; }
+    .tool-name.impact { color: var(--warning); }
+    .tool-name.cypher { color: #03dac6; }
+    .tool-name.detect_changes { color: var(--success); }
+    .tool-name.read_file { color: #ff9800; }
+    .tool-args {
+      flex: 1; font-size: 11px; color: var(--vscode-descriptionForeground);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .tool-result-badge {
+      font-size: 10px; padding: 1px 6px; border-radius: 8px;
+      font-weight: 600; white-space: nowrap;
+    }
+    .tool-result-badge.ok { background: rgba(76,175,80,0.15); color: var(--success); }
+    .tool-result-badge.err { background: rgba(255,68,68,0.15); color: var(--error); }
+    .tool-chevron {
+      font-size: 10px; transition: transform 0.15s; color: var(--vscode-descriptionForeground);
+    }
+    .agent-tool-card.expanded .tool-chevron { transform: rotate(90deg); }
+    .agent-tool-result {
+      display: none; padding: 6px 8px; font-size: 11px; border-top: 1px solid var(--border);
+    }
+    .agent-tool-card.expanded .agent-tool-result { display: block; }
+    .tool-result-summary {
+      margin-bottom: 4px; font-weight: 500;
+    }
+    .tool-result-json {
+      max-height: 200px; overflow: auto; padding: 6px 8px; border-radius: 4px;
+      background: var(--vscode-editor-background); font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 11px; line-height: 1.4; white-space: pre-wrap; word-break: break-all;
+      color: var(--vscode-descriptionForeground);
+    }
+    .tool-result-json.error-text { color: var(--error); }
+
+    /* Tool reason & assessment */
+    .tool-reason {
+      padding: 4px 8px; margin-bottom: 6px;
+      font-size: 11px; color: var(--vscode-descriptionForeground);
+      border-left: 2px solid var(--link);
+      background: var(--vscode-textBlockQuote-background, rgba(255,255,255,0.03));
+    }
+    .tool-reason-label {
+      font-weight: 600; color: var(--link); margin-right: 4px;
+    }
+    .tool-assessment {
+      padding: 6px 8px; margin-top: 6px; border-radius: 4px;
+      background: var(--vscode-textBlockQuote-background, rgba(255,255,255,0.04));
+      border-left: 3px solid var(--success);
+    }
+    .tool-assessment-label {
+      font-weight: 600; color: var(--success); font-size: 11px;
+      display: block; margin-bottom: 2px;
+    }
+    .tool-assessment-text {
+      font-size: 12px; line-height: 1.5; color: var(--fg);
+    }
+
+    /* Tool result tables */
+    .tool-result-table {
+      width: 100%; border-collapse: collapse; font-size: 11px; margin: 4px 0;
+    }
+    .tool-result-table th {
+      text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--border);
+      font-weight: 600; color: var(--vscode-descriptionForeground); font-size: 10px;
+      text-transform: uppercase; letter-spacing: 0.3px;
+    }
+    .tool-result-table td {
+      padding: 3px 6px; border-bottom: 1px solid rgba(128,128,128,0.15);
+    }
+    .tool-result-table tr:hover {
+      background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.04));
+    }
+
+    /* Tool tags */
+    .tool-tag {
+      display: inline-block; padding: 1px 6px; border-radius: 8px;
+      font-size: 10px; font-weight: 500;
+      background: var(--badge-bg); color: var(--badge-fg);
+      white-space: nowrap;
+    }
+
+    /* Tool section labels */
+    .tool-section-label {
+      font-weight: 600; font-size: 11px; margin: 4px 0 2px;
+      color: var(--fg);
+    }
+
+    /* Context call graph */
+    .tool-context-header {
+      margin-bottom: 6px; padding: 4px 0;
+    }
+    .tool-callgraph {
+      display: flex; flex-direction: column; gap: 6px; margin: 4px 0;
+    }
+    .callgraph-section {
+      padding: 4px 8px; border-radius: 4px;
+      background: var(--vscode-editor-background);
+    }
+    .callgraph-label {
+      font-size: 11px; font-weight: 600; margin-bottom: 3px;
+      color: var(--vscode-descriptionForeground);
+    }
+    .callgraph-items { display: flex; flex-wrap: wrap; gap: 4px; }
+    .callgraph-item {
+      display: inline-flex; align-items: center;
+      padding: 2px 8px; border-radius: 4px;
+      font-size: 11px; border: 1px solid var(--border);
+    }
+    .callgraph-item.caller {
+      border-color: rgba(187, 134, 252, 0.3);
+      background: rgba(187, 134, 252, 0.06);
+    }
+    .callgraph-item.callee {
+      border-color: rgba(3, 218, 198, 0.3);
+      background: rgba(3, 218, 198, 0.06);
+    }
+    .callgraph-more {
+      font-size: 10px; color: var(--vscode-descriptionForeground);
+      padding: 2px 6px; align-self: center;
+    }
+
+    /* Impact depth groups */
+    .impact-depth-group { margin: 4px 0; }
+    .impact-depth-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.3px; margin-bottom: 2px;
+    }
+    .impact-depth-items { padding-left: 10px; }
+    .impact-item {
+      padding: 1px 0; font-size: 11px;
+    }
+
+    /* Empty / loading states */
+    .empty-state {
+      text-align: center; padding: 40px 20px; color: var(--vscode-descriptionForeground);
+    }
+
+    /* Answer / Summary section */
+    .answer-section {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 14px;
+      overflow: hidden;
+    }
+    .answer-header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 12px;
+      background: var(--vscode-editorWidget-background, var(--input-bg));
+      cursor: pointer; user-select: none;
+      font-weight: 600; font-size: 13px;
+    }
+    .answer-header:hover { opacity: 0.85; }
+    .answer-chevron {
+      font-size: 10px; transition: transform 0.15s;
+      color: var(--vscode-descriptionForeground);
+    }
+    .answer-section.open .answer-chevron { transform: rotate(90deg); }
+    .answer-body {
+      display: none;
+      padding: 12px 14px;
+      font-size: 13px;
+      line-height: 1.7;
+      color: var(--fg);
+    }
+    .answer-section.open .answer-body { display: block; }
+    .answer-body h1, .answer-body h2, .answer-body h3, .answer-body h4 {
+      margin: 10px 0 4px; font-size: 13px; color: var(--link);
+    }
+    .answer-body h2 { font-size: 14px; }
+    .answer-body h1 { font-size: 15px; }
+    .answer-body p { margin: 4px 0 8px; }
+    .answer-body ul, .answer-body ol { padding-left: 20px; margin: 4px 0 8px; }
+    .answer-body li { margin: 2px 0; }
+    .answer-body code {
+      background: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.06));
+      padding: 1px 4px; border-radius: 3px;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 12px;
+    }
+    .answer-body pre {
+      background: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.06));
+      padding: 8px 10px; border-radius: 4px; overflow-x: auto;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 12px; line-height: 1.5; margin: 6px 0;
+    }
+    .answer-body blockquote {
+      border-left: 3px solid var(--link);
+      padding-left: 10px; margin: 6px 0;
+      color: var(--vscode-descriptionForeground);
+    }
+    .answer-body strong { color: var(--fg); }
+    .answer-body table.md-table,
+    .answer-body .md-table {
+      width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0;
+    }
+    .answer-body .md-table th {
+      text-align: left; padding: 5px 8px; border-bottom: 2px solid var(--border);
+      font-weight: 600; background: var(--vscode-editorWidget-background, var(--input-bg));
+    }
+    .answer-body .md-table td {
+      padding: 4px 8px; border-bottom: 1px solid var(--border);
+    }
+    .answer-body .md-table tr:hover {
+      background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.04));
+    }
+    .answer-body .file-ref {
+      color: var(--link); cursor: pointer; text-decoration: none;
+    }
+    .answer-body .file-ref:hover { text-decoration: underline; }
+
+    .spinner {
+      display: inline-block; width: 20px; height: 20px;
+      border: 2px solid var(--border); border-top-color: var(--btn-bg);
+      border-radius: 50%; animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <!-- ============ STATUS BAR ============ -->
+  <div class="status-bar" id="statusBar">
+    <div class="status-header">
+      <span class="status-dot not_indexed" id="statusDot"></span>
+      <strong>GitNexus:</strong>
+      <span id="statusLabel">Checking...</span>
+    </div>
+    <div class="status-stats" id="statusStats" style="display:none">
+      <span>Files: <b id="statFiles">0</b></span>
+      <span>Symbols: <b id="statSymbols">0</b></span>
+      <span>Processes: <b id="statProcesses">0</b></span>
+      <span>Communities: <b id="statCommunities">0</b></span>
+      <span>Last indexed: <b id="statLastIndexed">-</b></span>
+    </div>
+    <div class="progress-bar" id="progressBar" style="display:none">
+      <div class="progress-bar-fill" id="progressFill" style="width:0%"></div>
+    </div>
+    <div class="progress-label" id="progressLabel" style="display:none"></div>
+    <div id="statusError" style="display:none; color: var(--error); margin: 6px 0; font-size: 12px;"></div>
+    <div class="status-actions">
+      <button id="btnBuildIndex">Build Index</button>
+      <button id="btnReindex" class="secondary" style="display:none">Re-index Changed</button>
+      <button id="btnForceRebuild" class="secondary" style="display:none">Force Rebuild</button>
+    </div>
+    <!-- Build log console -->
+    <div id="indexLogContainer" style="display:none; margin-top:8px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+        <span style="font-size:11px; font-weight:600; color:var(--vscode-descriptionForeground);">Build Log</span>
+        <div style="display:flex; gap:4px;">
+          <button id="btnToggleAutoScroll" class="secondary" style="font-size:10px; padding:1px 6px;">Auto-scroll: ON</button>
+          <button id="btnClearLog" class="secondary" style="font-size:10px; padding:1px 6px;">Clear</button>
+          <button id="btnToggleLog" class="secondary" style="font-size:10px; padding:1px 6px;">▼ Hide</button>
+        </div>
+      </div>
+      <pre id="indexLog" style="
+        max-height: 200px; overflow-y: auto; padding: 6px 8px;
+        background: var(--vscode-terminal-background, #1e1e1e);
+        color: var(--vscode-terminal-foreground, #ccc);
+        border: 1px solid var(--border); border-radius: 3px;
+        font-family: var(--vscode-editor-font-family, monospace);
+        font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-all;
+        margin: 0;
+      "></pre>
+    </div>
+  </div>
+
+  <!-- ============ MODEL SELECTOR ============ -->
+  <div class="model-row">
+    <label for="modelSelect"><strong>Model:</strong></label>
+    <select id="modelSelect">
+      <option value="">Loading models...</option>
+    </select>
+  </div>
+
+  <!-- ============ QUERY INPUT ============ -->
+  <div class="query-section">
+    <h3>Query</h3>
+    <textarea id="queryInput" placeholder="Describe the code you're looking for...&#10;Example: Logic xu ly loi khi CAN bus timeout va recovery sequence"></textarea>
+    <div class="query-type-row">
+      <label><input type="radio" name="queryType" value="search" checked /> Search</label>
+      <label><input type="radio" name="queryType" value="bug_analysis" /> Bug Analysis</label>
+      <label><input type="radio" name="queryType" value="impact" /> Impact</label>
+    </div>
+    <div class="query-actions">
+      <button id="btnSearch">Search</button>
+      <button id="btnImport" class="secondary">Import Queries...</button>
+      <button id="btnExport" class="secondary" disabled>Export Results</button>
+    </div>
+    <!-- Batch queue (shown when queries imported) -->
+    <div class="batch-queue" id="batchQueue">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <strong style="font-size:12px;">Batch Queue</strong>
+        <div style="display:flex; gap:4px;">
+          <button id="btnRunAll" style="font-size:11px; padding:2px 8px;">Run All</button>
+          <button id="btnClearBatch" class="secondary" style="font-size:11px; padding:2px 8px;">Clear</button>
+        </div>
+      </div>
+      <div id="batchItems"></div>
+    </div>
+  </div>
+
+  <!-- ============ RESULTS ============ -->
+  <div class="results-section" id="resultsSection" style="display:none">
+    <div class="results-header">
+      <h3 id="resultsTitle">Results</h3>
+      <span class="results-count" id="resultsCount"></span>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" data-tab="all">All</div>
+      <div class="tab" data-tab="sequences">Sequences</div>
+      <div class="tab" data-tab="symbols">Symbols</div>
+      <div class="tab" data-tab="investigation" id="tabInvestigation" style="display:none">Investigation</div>
+    </div>
+
+    <!-- Tab: All -->
+    <div class="tab-content active" id="tabAll"></div>
+
+    <!-- Tab: Sequences -->
+    <div class="tab-content" id="tabSequences"></div>
+
+    <!-- Tab: Symbols -->
+    <div class="tab-content" id="tabSymbols"></div>
+
+    <!-- Tab: Investigation -->
+    <div class="tab-content" id="tabInvestigationContent"></div>
+  </div>
+
+  <!-- Empty state (shown when no search yet) -->
+  <div class="empty-state" id="emptyState">
+    <p style="font-size:14px; margin-bottom:8px;">Enter a query to search your AUTOSAR codebase</p>
+    <p>Supports natural language descriptions, bug reports, and impact analysis</p>
+  </div>
+
+  <!-- Loading overlay -->
+  <div id="loadingOverlay" style="display:none; text-align:center; padding:30px;">
+    <div class="spinner"></div>
+    <p id="loadingText" style="margin-top:10px; color: var(--vscode-descriptionForeground);">Searching...</p>
+  </div>
+
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi();
+
+    // ============ STATE ============
+    let currentResults = null;
+    let batchQueue = [];
+
+    // ============ ELEMENTS ============
+    const $ = (id) => document.getElementById(id);
+
+    // ============ STATUS BAR ============
+    function updateStatus(status) {
+      const dot = $('statusDot');
+      const label = $('statusLabel');
+      const stats = $('statusStats');
+      const progress = $('progressBar');
+      const progressFill = $('progressFill');
+      const progressLabel = $('progressLabel');
+      const errorEl = $('statusError');
+      const btnBuild = $('btnBuildIndex');
+      const btnReindex = $('btnReindex');
+      const btnForce = $('btnForceRebuild');
+
+      // Reset
+      dot.className = 'status-dot ' + status.state;
+      errorEl.style.display = 'none';
+      progress.style.display = 'none';
+      progressLabel.style.display = 'none';
+      stats.style.display = 'none';
+      btnReindex.style.display = 'none';
+      btnForce.style.display = 'none';
+
+      switch (status.state) {
+        case 'not_indexed':
+          label.textContent = 'Not Indexed';
+          btnBuild.textContent = 'Build Index';
+          btnBuild.disabled = false;
+          break;
+        case 'indexing':
+          label.textContent = 'Indexing...';
+          btnBuild.disabled = true;
+          if (status.progress) {
+            progress.style.display = 'block';
+            progressLabel.style.display = 'block';
+            const pct = status.progress.percent >= 0 ? status.progress.percent : -1;
+            if (pct >= 0) {
+              progressFill.style.width = pct + '%';
+              progressLabel.textContent = status.progress.phase + ' — ' + pct + '%'
+                + (status.progress.currentFile ? ' — ' + status.progress.currentFile : '');
+            } else {
+              progressFill.style.width = '100%';
+              progressLabel.textContent = status.progress.phase + '...';
+            }
+          }
+          break;
+        case 'indexed':
+          label.textContent = 'Indexed';
+          btnBuild.textContent = 'Build Index';
+          btnBuild.disabled = false;
+          btnReindex.style.display = 'inline-block';
+          btnForce.style.display = 'inline-block';
+          if (status.stats) showStats(status.stats);
+          break;
+        case 'stale':
+          label.textContent = 'Stale (out of sync with HEAD)';
+          btnBuild.disabled = false;
+          btnReindex.style.display = 'inline-block';
+          btnForce.style.display = 'inline-block';
+          if (status.stats) showStats(status.stats);
+          break;
+        case 'error':
+          label.textContent = 'Error';
+          errorEl.textContent = status.error || 'Unknown error';
+          errorEl.style.display = 'block';
+          btnBuild.disabled = false;
+          break;
+      }
+    }
+
+    function showStats(s) {
+      $('statusStats').style.display = 'flex';
+      $('statFiles').textContent = s.files?.toLocaleString() || '0';
+      $('statSymbols').textContent = s.symbols?.toLocaleString() || '0';
+      $('statProcesses').textContent = s.processes?.toLocaleString() || '0';
+      $('statCommunities').textContent = s.communities?.toLocaleString() || '0';
+      $('statLastIndexed').textContent = s.lastIndexedAt || '-';
+    }
+
+    // ============ MODEL SELECTOR ============
+    function populateModels(models) {
+      const sel = $('modelSelect');
+      sel.innerHTML = '';
+      if (!Array.isArray(models) || models.length === 0) {
+        sel.innerHTML = '<option value="">No models available</option>';
+        return;
+      }
+      for (const m of models) {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.name + (m.vendor ? ' (' + m.vendor + ')' : '');
+        sel.appendChild(opt);
+      }
+    }
+    $('modelSelect').addEventListener('change', (e) => {
+      vscode.postMessage({ type: 'selectModel', modelId: e.target.value });
+    });
+
+    // ============ SEARCH ============
+    $('btnSearch').addEventListener('click', () => {
+      const query = $('queryInput').value.trim();
+      if (!query) return;
+      const queryType = document.querySelector('input[name="queryType"]:checked').value;
+      vscode.postMessage({ type: 'search', query, queryType });
+      showLoading('Searching...');
+    });
+
+    $('queryInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        $('btnSearch').click();
+      }
+    });
+
+    // ============ INDEX BUTTONS ============
+    $('btnBuildIndex').addEventListener('click', () => {
+      vscode.postMessage({ type: 'buildIndex', force: false, withEmbeddings: true });
+    });
+    $('btnReindex').addEventListener('click', () => {
+      vscode.postMessage({ type: 'buildIndex', force: false, withEmbeddings: false });
+    });
+    $('btnForceRebuild').addEventListener('click', () => {
+      vscode.postMessage({ type: 'buildIndex', force: true, withEmbeddings: true });
+    });
+
+    // ============ BUILD LOG ============
+    let logAutoScroll = true;
+    let logVisible = true;
+
+    function appendLogLine(line) {
+      const container = $('indexLogContainer');
+      const logEl = $('indexLog');
+      container.style.display = 'block';
+      logEl.style.display = logVisible ? 'block' : 'none';
+
+      const lineEl = document.createElement('span');
+      lineEl.textContent = line + '\n';
+
+      // Colorize based on content
+      if (/error|fail|fatal/i.test(line)) {
+        lineEl.style.color = 'var(--error)';
+      } else if (/warn/i.test(line)) {
+        lineEl.style.color = 'var(--warning)';
+      } else if (/done|complete|success|finish/i.test(line)) {
+        lineEl.style.color = 'var(--success)';
+      } else if (/\[\w+\]\s*\d+%/.test(line)) {
+        lineEl.style.color = 'var(--vscode-textLink-foreground)';
+      }
+
+      logEl.appendChild(lineEl);
+      if (logAutoScroll) {
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+    }
+
+    function clearLog() {
+      $('indexLog').innerHTML = '';
+    }
+
+    $('btnClearLog').addEventListener('click', clearLog);
+
+    $('btnToggleLog').addEventListener('click', () => {
+      logVisible = !logVisible;
+      $('indexLog').style.display = logVisible ? 'block' : 'none';
+      $('btnToggleLog').textContent = logVisible ? '▼ Hide' : '▶ Show';
+    });
+
+    $('btnToggleAutoScroll').addEventListener('click', () => {
+      logAutoScroll = !logAutoScroll;
+      $('btnToggleAutoScroll').textContent = 'Auto-scroll: ' + (logAutoScroll ? 'ON' : 'OFF');
+      if (logAutoScroll) {
+        $('indexLog').scrollTop = $('indexLog').scrollHeight;
+      }
+    });
+
+    // ============ IMPORT / EXPORT ============
+    $('btnImport').addEventListener('click', () => {
+      vscode.postMessage({ type: 'importQueries' });
+    });
+    $('btnExport').addEventListener('click', () => {
+      vscode.postMessage({ type: 'exportResults' });
+    });
+    $('btnRunAll').addEventListener('click', () => {
+      vscode.postMessage({ type: 'runBatch' });
+    });
+    $('btnClearBatch').addEventListener('click', () => {
+      batchQueue = [];
+      renderBatchQueue();
+    });
+
+    // ============ TABS ============
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        const target = tab.dataset.tab;
+        const content = ({
+          all: 'tabAll', sequences: 'tabSequences',
+          symbols: 'tabSymbols', investigation: 'tabInvestigationContent'
+        })[target];
+        if (content) $(content).classList.add('active');
+      });
+    });
+
+    // ============ RENDER RESULTS ============
+    function renderResults(results) {
+      currentResults = results;
+      $('emptyState').style.display = 'none';
+      $('loadingOverlay').style.display = 'none';
+      $('resultsSection').style.display = 'block';
+      $('btnExport').disabled = false;
+
+      $('resultsTitle').textContent = 'Results for: "' + results.query + '"';
+      const totalCount = (results.sequences?.length || 0) + (results.symbols?.length || 0);
+      $('resultsCount').textContent = totalCount + ' matches • ' + results.metadata.durationMs + 'ms • ' + results.metadata.model;
+
+      // Show investigation tab if bug analysis
+      $('tabInvestigation').style.display = results.investigation ? 'block' : 'none';
+
+      renderAllTab(results);
+      renderSequencesTab(results.sequences || []);
+      renderSymbolsTab(results.symbols || []);
+      if (results.investigation) {
+        renderInvestigationTab(results.investigation);
+      }
+    }
+
+    function renderAllTab(results) {
+      const el = $('tabAll');
+      let html = '';
+
+      // Agent reasoning trace (collapsible)
+      const trace = results.agentTrace || [];
+      if (trace.length > 0) {
+        html += '<details class="agent-trace" open style="margin-bottom:12px;">';
+        html += '<summary style="cursor:pointer;font-weight:600;color:var(--fg);padding:6px 0;">';
+        html += '🧠 Agent Reasoning (' + trace.length + ' iteration' + (trace.length > 1 ? 's' : '') + ')</summary>';
+        html += '<div class="agent-trace-body">';
+        for (const step of trace) {
+          html += renderAgentStep(step);
+        }
+        html += '</div></details>';
+      }
+
+      // === Answer / Summary section ===
+      if (results.answer) {
+        const answerLabel = results.type === 'bug_analysis' ? '🔎 Phân tích & Kết luận' : '📋 Tổng hợp & Giải thích';
+        html += '<div class="answer-section open">';
+        html += '<div class="answer-header" data-action="toggle-answer">';
+        html += '<span class="answer-chevron">▶</span>';
+        html += '<span>' + answerLabel + '</span>';
+        html += '</div>';
+        html += '<div class="answer-body">' + renderMarkdown(results.answer) + '</div>';
+        html += '</div>';
+      }
+
+      // Sequences summary
+      const seqs = results.sequences || [];
+      if (seqs.length > 0) {
+        html += '<h3>Execution Sequences (' + seqs.length + ')</h3>';
+        for (const seq of seqs) {
+          html += renderSequenceCard(seq, false);
+        }
+      }
+
+      // Top symbols
+      const syms = results.symbols || [];
+      if (syms.length > 0) {
+        html += '<h3 style="margin-top:12px;">Key Symbols (' + syms.length + ')</h3>';
+        html += renderSymbolTable(syms.slice(0, 10));
+      }
+
+      // Clusters
+      const clusters = results.clusters || [];
+      if (clusters.length > 0) {
+        html += '<h3 style="margin-top:12px;">Related Clusters</h3>';
+        html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
+        for (const c of clusters) {
+          html += '<span style="padding:2px 8px;border:1px solid var(--border);border-radius:12px;font-size:11px;">'
+            + escHtml(c.name) + ' (cohesion: ' + (c.cohesion?.toFixed(2) || '?') + ')</span>';
+        }
+        html += '</div>';
+      }
+
+      el.innerHTML = html;
+      bindFileLinks(el);
+      bindToolCardToggles(el);
+      bindAnswerToggles(el);
+    }
+
+    function renderSequencesTab(sequences) {
+      const el = $('tabSequences');
+      if (sequences.length === 0) {
+        el.innerHTML = '<div class="empty-state"><p>No execution sequences found</p></div>';
+        return;
+      }
+      let html = '';
+      for (const seq of sequences) {
+        html += renderSequenceCard(seq, true);
+      }
+      el.innerHTML = html;
+      bindFileLinks(el);
+      bindSequenceToggles(el);
+    }
+
+    function renderSequenceCard(seq, startOpen) {
+      const steps = seq.steps || [];
+      let html = '<div class="sequence-card">';
+      html += '<div class="sequence-header">';
+      html += '<div><span class="sequence-title">' + escHtml(seq.name) + '</span>';
+      html += '<span class="sequence-meta" style="margin-left:8px;">' + seq.processType + ' | ' + steps.length + ' steps';
+      if (seq.communities?.length) html += ' | ' + seq.communities.join(' → ');
+      html += '</span></div>';
+      html += '<span style="font-weight:700;color:var(--success);">' + (seq.confidence?.toFixed(2) || '') + '</span>';
+      html += '</div>';
+
+      html += '<div class="sequence-body' + (startOpen ? ' open' : '') + '">';
+      for (const step of steps) {
+        html += '<div class="step-row">';
+        html += '<span class="step-index">' + (step.stepIndex + 1) + '</span>';
+        html += '<div class="step-info">';
+        html += '<span class="step-symbol">' + escHtml(step.symbol) + '</span> ';
+        html += '<a class="file-link" data-file="' + escAttr(step.filePath) + '" data-line="' + step.line + '">'
+          + escHtml(shortPath(step.filePath)) + ':' + step.line + '</a>';
+        if (step.description) {
+          html += '<div class="step-desc">' + escHtml(step.description) + '</div>';
+        }
+        html += '</div></div>';
+      }
+      html += '</div></div>';
+      return html;
+    }
+
+    function renderSymbolsTab(symbols) {
+      const el = $('tabSymbols');
+      if (symbols.length === 0) {
+        el.innerHTML = '<div class="empty-state"><p>No symbols found</p></div>';
+        return;
+      }
+      el.innerHTML = renderSymbolTable(symbols);
+      bindFileLinks(el);
+    }
+
+    function renderSymbolTable(symbols) {
+      let html = '<table class="symbol-table">';
+      html += '<tr><th>#</th><th>Score</th><th>Symbol</th><th>File</th><th>Line</th></tr>';
+      for (let i = 0; i < symbols.length; i++) {
+        const s = symbols[i];
+        const score = s.score ?? 0;
+        const pct = Math.round(score * 100);
+        html += '<tr>';
+        html += '<td>' + (i + 1) + '</td>';
+        html += '<td><span class="score-bar" style="width:' + pct + 'px;"></span> ' + score.toFixed(2) + '</td>';
+        html += '<td><strong>' + escHtml(s.symbolName) + '</strong></td>';
+        html += '<td><a class="file-link" data-file="' + escAttr(s.filePath) + '" data-line="' + s.line + '">'
+          + escHtml(shortPath(s.filePath)) + '</a></td>';
+        html += '<td>:' + s.line + '</td>';
+        html += '</tr>';
+      }
+      html += '</table>';
+      return html;
+    }
+
+    // ============ INVESTIGATION TAB ============
+    function renderInvestigationTab(inv) {
+      const el = $('tabInvestigationContent');
+      let html = '<h3>Bug Analysis</h3>';
+
+      // Summary / narrative answer
+      if (inv.summary) {
+        html += '<div class="answer-section open">';
+        html += '<div class="answer-header" data-action="toggle-answer">';
+        html += '<span class="answer-chevron">▶</span>';
+        html += '<span>🔎 Phân tích tổng hợp</span>';
+        html += '</div>';
+        html += '<div class="answer-body">' + renderMarkdown(inv.summary) + '</div>';
+        html += '</div>';
+      }
+
+      // Suspect points
+      if (inv.suspectPoints?.length) {
+        html += '<h3 style="margin-top:10px;">Suspect Points</h3>';
+        for (const sp of inv.suspectPoints) {
+          html += '<div class="suspect-card ' + sp.severity + '">';
+          html += '<div class="suspect-severity ' + sp.severity + '">'
+            + sp.severity.toUpperCase() + ' — ' + escHtml(sp.category || '') + '</div>';
+          html += '<div><strong>' + escHtml(sp.symbol) + '</strong> ';
+          html += '<a class="file-link" data-file="' + escAttr(sp.filePath) + '" data-line="' + sp.line + '">'
+            + escHtml(shortPath(sp.filePath)) + ':' + sp.line + '</a></div>';
+          html += '<div class="suspect-reason">' + escHtml(sp.reason) + '</div>';
+          html += '<div class="suspect-action">Suggested: ' + escHtml(sp.suggestedAction) + '</div>';
+          html += '<button class="secondary" style="margin-top:6px;font-size:11px;" '
+            + 'data-action="investigate" data-symbol="' + escAttr(sp.symbol) + '">Investigate Deeper</button>';
+          html += '</div>';
+        }
+      }
+
+      // Suggestions
+      if (inv.suggestions?.length) {
+        html += '<h3 style="margin-top:12px;">Investigation Suggestions</h3>';
+        html += '<ul class="suggestion-list">';
+        for (const sug of inv.suggestions) {
+          html += '<li>';
+          html += '<span class="suggestion-severity ' + (sug.severity || '') + '">[' + (sug.severity || '?') + ']</span> ';
+          html += escHtml(sug.text || sug.description || '');
+          if (sug.filePath) {
+            html += ' <a class="file-link" data-file="' + escAttr(sug.filePath) + '" data-line="' + (sug.line || 1) + '">'
+              + escHtml(shortPath(sug.filePath)) + ':' + (sug.line || 1) + '</a>';
+          }
+          html += '</li>';
+        }
+        html += '</ul>';
+      }
+
+      // Blast radius
+      if (inv.blastRadius?.affected?.length) {
+        html += '<div class="blast-radius">';
+        html += '<h3>Blast Radius (risk: ' + (inv.blastRadius.riskLevel || '?') + ')</h3>';
+        for (const a of inv.blastRadius.affected) {
+          html += '<div class="blast-item">';
+          html += '<span style="opacity:0.6;">depth ' + a.depth + '</span> ';
+          html += '<strong>' + escHtml(a.symbol) + '</strong> ';
+          html += '<a class="file-link" data-file="' + escAttr(a.filePath) + '" data-line="' + a.line + '">'
+            + escHtml(shortPath(a.filePath)) + ':' + a.line + '</a>';
+          html += ' <span style="font-size:11px;color:var(--vscode-descriptionForeground);">(' + a.relationType + ' ' + (a.confidence?.toFixed(2) || '') + ')</span>';
+          html += '</div>';
+        }
+        html += '</div>';
+      }
+
+      // Test checklist
+      if (inv.testChecklist?.length) {
+        html += '<h3 style="margin-top:12px;">Test Checklist</h3>';
+        html += '<ol style="padding-left:20px;font-size:12px;">';
+        for (const item of inv.testChecklist) {
+          html += '<li style="padding:2px 0;">' + escHtml(item) + '</li>';
+        }
+        html += '</ol>';
+      }
+
+      html += '<div style="margin-top:12px;display:flex;gap:6px;">';
+      html += '<button class="secondary" data-action="generateTestChecklist">Generate Test Checklist</button>';
+      html += '<button class="secondary" data-action="exportResults">Export Full Report</button>';
+      html += '</div>';
+
+      el.innerHTML = html;
+      bindFileLinks(el);
+      bindActionButtons(el);
+      bindAnswerToggles(el);
+    }
+
+    function investigateDeeper(symbol) {
+      vscode.postMessage({ type: 'investigateDeeper', suspectId: symbol });
+      showLoading('Investigating ' + symbol + '...');
+    }
+
+    // ============ BATCH QUEUE ============
+    function renderBatchQueue() {
+      const container = $('batchQueue');
+      const items = $('batchItems');
+      if (batchQueue.length === 0) {
+        container.classList.remove('visible');
+        return;
+      }
+      container.classList.add('visible');
+      let html = '';
+      for (const q of batchQueue) {
+        html += '<div class="batch-item">';
+        html += '<input type="checkbox" checked />';
+        html += '<span>' + escHtml(q.id + '. ' + q.description) + '</span>';
+        html += '<span class="badge ' + q.status + '">' + q.status + '</span>';
+        html += '</div>';
+      }
+      items.innerHTML = html;
+    }
+
+    // ============ LOADING ============
+    function showLoading(text) {
+      $('emptyState').style.display = 'none';
+      $('resultsSection').style.display = 'none';
+      $('loadingOverlay').style.display = 'block';
+      $('loadingText').textContent = text || 'Searching...';
+    }
+
+    // ============ AGENT TRACE RENDERING ============
+
+    const TOOL_META = {
+      query:          { icon: '🔍', label: 'Query',          color: 'query' },
+      context:        { icon: '🎯', label: 'Context',        color: 'context' },
+      impact:         { icon: '💥', label: 'Impact',         color: 'impact' },
+      cypher:         { icon: '🔗', label: 'Cypher',         color: 'cypher' },
+      detect_changes: { icon: '📝', label: 'Detect Changes', color: 'detect_changes' },
+      read_file:      { icon: '📄', label: 'Read File',      color: 'read_file' },
+    };
+
+    function renderAgentStep(step) {
+      let h = '<div class="agent-step">';
+      h += '<div class="agent-step-header">';
+      h += '<span class="iter-badge">' + step.iteration + '</span>';
+      h += '<span>Iteration ' + step.iteration + '</span>';
+      if (step.toolCalls && step.toolCalls.length > 0) {
+        h += '<span style="font-weight:400;font-size:11px;color:var(--vscode-descriptionForeground);">— '
+          + step.toolCalls.length + ' tool call' + (step.toolCalls.length > 1 ? 's' : '') + '</span>';
+      }
+      h += '</div>';
+
+      // Reasoning block
+      h += '<div class="agent-step-reasoning">' + escHtml(step.reasoning) + '</div>';
+
+      // Tool call cards
+      if (step.toolCalls && step.toolCalls.length > 0) {
+        h += '<div class="agent-tool-cards">';
+        for (let i = 0; i < step.toolCalls.length; i++) {
+          h += renderToolCallCard(step.toolCalls[i], step.iteration, i);
+        }
+        h += '</div>';
+      }
+
+      h += '</div>';
+      return h;
+    }
+
+    function renderToolCallCard(tc, stepIdx, callIdx) {
+      const meta = TOOL_META[tc.tool] || { icon: '⚙️', label: tc.tool, color: '' };
+      const isError = tc.result && tc.result.error;
+      const cardId = 'tc-' + stepIdx + '-' + callIdx;
+
+      // Format args for display
+      const argsCopy = Object.assign({}, tc.args || {});
+      delete argsCopy.repo; // noise — repo is always injected
+      const argsStr = Object.entries(argsCopy)
+        .map(function(kv) { return kv[0] + '=' + JSON.stringify(kv[1]); })
+        .join(', ');
+
+      let h = '<div class="agent-tool-card' + (isError ? ' has-error' : '') + '" id="' + cardId + '">';
+
+      // Header
+      h += '<div class="agent-tool-header" data-card-id="' + cardId + '">';
+      h += '<span class="tool-icon">' + meta.icon + '</span>';
+      h += '<span class="tool-name ' + meta.color + '">' + escHtml(meta.label) + '</span>';
+      h += '<span class="tool-args">' + escHtml(argsStr) + '</span>';
+
+      // Result summary badge
+      const summary = getToolResultSummary(tc.tool, tc.result);
+      if (isError) {
+        h += '<span class="tool-result-badge err">ERROR</span>';
+      } else if (summary) {
+        h += '<span class="tool-result-badge ok">' + escHtml(summary) + '</span>';
+      }
+      h += '<span class="tool-chevron">▶</span>';
+      h += '</div>';
+
+      // Result body (hidden until expanded)
+      h += '<div class="agent-tool-result">';
+
+      // Reason: why the agent called this tool
+      if (tc.reason) {
+        h += '<div class="tool-reason">';
+        h += '<span class="tool-reason-label">💡 Lý do gọi:</span> ' + escHtml(tc.reason);
+        h += '</div>';
+      }
+
+      if (isError) {
+        h += '<div class="tool-result-summary" style="color:var(--error);">Error: ' + escHtml(String(tc.result.error)) + '</div>';
+      } else if (tc.result) {
+        // Structured summary
+        const structured = renderToolResultStructured(tc.tool, tc.result);
+        if (structured) {
+          h += '<div class="tool-result-summary">' + structured + '</div>';
+        }
+
+        // Agent assessment
+        if (tc.assessment) {
+          h += '<div class="tool-assessment">';
+          h += '<span class="tool-assessment-label">🤖 Đánh giá:</span>';
+          h += '<div class="tool-assessment-text">' + escHtml(tc.assessment) + '</div>';
+          h += '</div>';
+        }
+
+        // Raw JSON (collapsible)
+        const jsonStr = JSON.stringify(tc.result, null, 2);
+        const truncated = jsonStr.length > 3000 ? jsonStr.slice(0, 3000) + '\n... (truncated)' : jsonStr;
+        h += '<details style="margin-top:6px;">';
+        h += '<summary style="cursor:pointer;font-size:10px;color:var(--vscode-descriptionForeground);">📄 Raw JSON (' + formatBytes(jsonStr.length) + ')</summary>';
+        h += '<div class="tool-result-json">' + escHtml(truncated) + '</div>';
+        h += '</details>';
+      } else {
+        h += '<div class="tool-result-summary" style="color:var(--vscode-descriptionForeground);">No result data</div>';
+      }
+      h += '</div>';
+
+      h += '</div>';
+      return h;
+    }
+
+    function getToolResultSummary(tool, result) {
+      if (!result || result.error) return '';
+      try {
+        switch (tool) {
+          case 'query': {
+            const procs = (result.processes || []).length;
+            const res = (result.results || []).length;
+            const parts = [];
+            if (procs) parts.push(procs + ' process' + (procs > 1 ? 'es' : ''));
+            if (res) parts.push(res + ' result' + (res > 1 ? 's' : ''));
+            return parts.join(', ') || 'OK';
+          }
+          case 'context': {
+            const callers = (result.incoming && result.incoming.calls || []).length;
+            const callees = (result.outgoing && result.outgoing.calls || []).length;
+            const flows = (result.processes || []).length;
+            const parts = [];
+            if (callers) parts.push(callers + ' caller' + (callers > 1 ? 's' : ''));
+            if (callees) parts.push(callees + ' callee' + (callees > 1 ? 's' : ''));
+            if (flows) parts.push(flows + ' flow' + (flows > 1 ? 's' : ''));
+            return parts.join(', ') || 'OK';
+          }
+          case 'impact': {
+            const affected = (result.affected || []).length;
+            const risk = result.riskLevel || '';
+            const parts = [];
+            if (affected) parts.push(affected + ' affected');
+            if (risk) parts.push('risk: ' + risk);
+            return parts.join(', ') || 'OK';
+          }
+          case 'cypher': {
+            if (Array.isArray(result)) return result.length + ' row' + (result.length !== 1 ? 's' : '');
+            if (result.rows) return result.rows.length + ' row' + (result.rows.length !== 1 ? 's' : '');
+            return 'OK';
+          }
+          case 'detect_changes': {
+            const files = (result.files || []).length;
+            const syms = (result.symbols || []).length;
+            const parts = [];
+            if (files) parts.push(files + ' file' + (files > 1 ? 's' : ''));
+            if (syms) parts.push(syms + ' symbol' + (syms > 1 ? 's' : ''));
+            return parts.join(', ') || 'OK';
+          }
+          default: return 'OK';
+        }
+      } catch (e) { return 'OK'; }
+    }
+
+    function renderToolResultStructured(tool, result) {
+      if (!result) return '';
+      try {
+        switch (tool) {
+          case 'query': {
+            let h = '';
+            const procs = result.processes || [];
+            if (procs.length > 0) {
+              h += '<div class="tool-section-label">📂 Execution Processes (' + procs.length + ')</div>';
+              h += '<table class="tool-result-table">';
+              h += '<tr><th>#</th><th>Process Name</th><th>Symbols</th><th>Type</th></tr>';
+              for (let pi = 0; pi < Math.min(procs.length, 8); pi++) {
+                const p = procs[pi];
+                const syms = p.symbols || [];
+                h += '<tr>';
+                h += '<td>' + (pi + 1) + '</td>';
+                h += '<td><strong>' + escHtml(p.name || 'unnamed') + '</strong></td>';
+                h += '<td>';
+                if (syms.length > 0) {
+                  h += syms.slice(0, 3).map(function(s) { return '<code>' + escHtml(s.name || s.symbol || s) + '</code>'; }).join(' → ');
+                  if (syms.length > 3) h += ' <span style="color:var(--vscode-descriptionForeground);">+' + (syms.length - 3) + '</span>';
+                } else { h += '-'; }
+                h += '</td>';
+                h += '<td><span class="tool-tag">' + escHtml(p.type || p.processType || 'process') + '</span></td>';
+                h += '</tr>';
+              }
+              if (procs.length > 8) {
+                h += '<tr><td colspan="4" style="color:var(--vscode-descriptionForeground);text-align:center;">... +' + (procs.length - 8) + ' more processes</td></tr>';
+              }
+              h += '</table>';
+            }
+            const flat = result.results || [];
+            if (flat.length > 0) {
+              h += '<div class="tool-section-label" style="margin-top:6px;">🎯 Search Results (' + flat.length + ')</div>';
+              h += '<table class="tool-result-table">';
+              h += '<tr><th>#</th><th>Symbol</th><th>File</th><th>Score</th></tr>';
+              for (let ri = 0; ri < Math.min(flat.length, 10); ri++) {
+                var r = flat[ri];
+                var fp = r.filePath || r.file || '';
+                h += '<tr>';
+                h += '<td>' + (ri + 1) + '</td>';
+                h += '<td><code>' + escHtml(r.name || r.symbol || '') + '</code>';
+                if (r.type || r.kind) h += ' <span class="tool-tag">' + escHtml(r.type || r.kind) + '</span>';
+                h += '</td>';
+                h += '<td>';
+                if (fp) h += '<a class="file-link" data-file="' + escAttr(fp) + '" data-line="' + (r.line || 1) + '">' + escHtml(shortPath(fp)) + ':' + (r.line || '?') + '</a>';
+                else h += '-';
+                h += '</td>';
+                h += '<td>';
+                if (r.score != null) {
+                  var pct = Math.round((r.score || 0) * 100);
+                  h += '<span class="score-bar" style="width:' + Math.max(pct * 0.5, 4) + 'px;"></span> ' + (r.score || 0).toFixed ? (r.score).toFixed(2) : r.score;
+                } else { h += '-'; }
+                h += '</td>';
+                h += '</tr>';
+              }
+              if (flat.length > 10) {
+                h += '<tr><td colspan="4" style="color:var(--vscode-descriptionForeground);text-align:center;">... +' + (flat.length - 10) + ' more</td></tr>';
+              }
+              h += '</table>';
+            }
+            return h;
+          }
+          case 'context': {
+            let h = '';
+            const sym = result.symbol || {};
+            if (sym.symbolName || sym.name) {
+              h += '<div class="tool-context-header">';
+              h += '<strong>' + escHtml(sym.symbolName || sym.name) + '</strong>';
+              if (sym.type || sym.kind) h += ' <span class="tool-tag">' + escHtml(sym.type || sym.kind) + '</span>';
+              if (sym.filePath || sym.file) {
+                var sfp = sym.filePath || sym.file;
+                h += ' <a class="file-link" data-file="' + escAttr(sfp) + '" data-line="' + (sym.line || 1) + '">' + escHtml(shortPath(sfp)) + ':' + (sym.line || '?') + '</a>';
+              }
+              h += '</div>';
+            }
+
+            // Call graph visualization
+            const inCalls = (result.incoming && result.incoming.calls) || [];
+            const outCalls = (result.outgoing && result.outgoing.calls) || [];
+            if (inCalls.length > 0 || outCalls.length > 0) {
+              h += '<div class="tool-callgraph">';
+              // Callers → [Target] → Callees
+              if (inCalls.length > 0) {
+                h += '<div class="callgraph-section">';
+                h += '<div class="callgraph-label">← Callers (' + inCalls.length + ')</div>';
+                h += '<div class="callgraph-items">';
+                for (var ci = 0; ci < Math.min(inCalls.length, 8); ci++) {
+                  var caller = inCalls[ci];
+                  var cname = typeof caller === 'string' ? caller : (caller.name || caller.symbol || '');
+                  var cfp = typeof caller === 'string' ? '' : (caller.filePath || caller.file || '');
+                  h += '<span class="callgraph-item caller">';
+                  if (cfp) {
+                    h += '<a class="file-link" data-file="' + escAttr(cfp) + '" data-line="' + (caller.line || 1) + '">' + escHtml(cname) + '</a>';
+                  } else {
+                    h += '<code>' + escHtml(cname) + '</code>';
+                  }
+                  h += '</span>';
+                }
+                if (inCalls.length > 8) h += '<span class="callgraph-more">+' + (inCalls.length - 8) + '</span>';
+                h += '</div></div>';
+              }
+              if (outCalls.length > 0) {
+                h += '<div class="callgraph-section">';
+                h += '<div class="callgraph-label">→ Callees (' + outCalls.length + ')</div>';
+                h += '<div class="callgraph-items">';
+                for (var ci2 = 0; ci2 < Math.min(outCalls.length, 8); ci2++) {
+                  var callee = outCalls[ci2];
+                  var ename = typeof callee === 'string' ? callee : (callee.name || callee.symbol || '');
+                  var efp = typeof callee === 'string' ? '' : (callee.filePath || callee.file || '');
+                  h += '<span class="callgraph-item callee">';
+                  if (efp) {
+                    h += '<a class="file-link" data-file="' + escAttr(efp) + '" data-line="' + (callee.line || 1) + '">' + escHtml(ename) + '</a>';
+                  } else {
+                    h += '<code>' + escHtml(ename) + '</code>';
+                  }
+                  h += '</span>';
+                }
+                if (outCalls.length > 8) h += '<span class="callgraph-more">+' + (outCalls.length - 8) + '</span>';
+                h += '</div></div>';
+              }
+              h += '</div>';
+            }
+
+            const flows = result.processes || [];
+            if (flows.length > 0) {
+              h += '<div class="tool-section-label">⇄ Execution Flows (' + flows.length + ')</div>';
+              h += '<div style="display:flex;flex-wrap:wrap;gap:4px;">';
+              for (var fi = 0; fi < Math.min(flows.length, 6); fi++) {
+                var f = flows[fi];
+                h += '<span class="tool-tag">' + escHtml(typeof f === 'string' ? f : (f.name || f)) + '</span>';
+              }
+              if (flows.length > 6) h += '<span class="callgraph-more">+' + (flows.length - 6) + '</span>';
+              h += '</div>';
+            }
+
+            // Community/cluster info
+            if (result.cluster || result.community) {
+              h += '<div style="margin-top:4px;"><span class="tool-section-label">🏘️ Module:</span> <span class="tool-tag">' + escHtml(result.cluster || result.community) + '</span></div>';
+            }
+            return h;
+          }
+          case 'impact': {
+            let h = '';
+            if (result.target) h += '<div><strong>Target:</strong> <code>' + escHtml(result.target) + '</code></div>';
+            if (result.riskLevel) {
+              const riskColors = { low: 'var(--success)', medium: 'var(--warning)', high: 'var(--error)', critical: 'var(--error)' };
+              const riskIcons = { low: '🟢', medium: '🟡', high: '🔴', critical: '🔴' };
+              h += '<div>' + (riskIcons[result.riskLevel] || '⚪') + ' <strong>Risk Level:</strong> <span style="color:' + (riskColors[result.riskLevel] || 'inherit') + ';font-weight:600;">'
+                + escHtml(result.riskLevel.toUpperCase()) + '</span></div>';
+            }
+            const affected = result.affected || [];
+            if (affected.length > 0) {
+              h += '<div class="tool-section-label" style="margin-top:4px;">💥 Blast Radius (' + affected.length + ' symbols)</div>';
+              // Group by depth
+              var byDepth = {};
+              for (var ai = 0; ai < affected.length; ai++) {
+                var a = affected[ai];
+                var d = a.depth || 0;
+                if (!byDepth[d]) byDepth[d] = [];
+                byDepth[d].push(a);
+              }
+              var depthLabels = { 1: 'WILL BREAK — direct', 2: 'LIKELY AFFECTED — indirect', 3: 'MAY NEED TESTING — transitive' };
+              var depthColors = { 1: 'var(--error)', 2: 'var(--warning)', 3: 'var(--vscode-descriptionForeground)' };
+              for (var dk in byDepth) {
+                h += '<div class="impact-depth-group">';
+                h += '<div class="impact-depth-label" style="color:' + (depthColors[dk] || 'inherit') + ';">';
+                h += 'd=' + dk + ' — ' + (depthLabels[dk] || 'depth ' + dk) + ' (' + byDepth[dk].length + ')';
+                h += '</div>';
+                h += '<div class="impact-depth-items">';
+                for (var adi = 0; adi < Math.min(byDepth[dk].length, 5); adi++) {
+                  var ad = byDepth[dk][adi];
+                  var adfp = ad.filePath || ad.file || '';
+                  h += '<div class="impact-item">';
+                  h += '<code>' + escHtml(ad.symbol || ad.name || '') + '</code>';
+                  if (adfp) h += ' <a class="file-link" data-file="' + escAttr(adfp) + '" data-line="' + (ad.line || 1) + '">' + escHtml(shortPath(adfp)) + '</a>';
+                  if (ad.relationType) h += ' <span class="tool-tag">' + escHtml(ad.relationType) + '</span>';
+                  h += '</div>';
+                }
+                if (byDepth[dk].length > 5) h += '<div style="color:var(--vscode-descriptionForeground);padding-left:8px;">+' + (byDepth[dk].length - 5) + ' more</div>';
+                h += '</div></div>';
+              }
+            }
+            return h;
+          }
+          case 'cypher': {
+            let h = '';
+            const rows = Array.isArray(result) ? result : (result.rows || []);
+            if (rows.length > 0) {
+              // Auto-detect columns
+              var cols = Object.keys(rows[0] || {});
+              h += '<div class="tool-section-label">📊 Query Results (' + rows.length + ' rows)</div>';
+              h += '<table class="tool-result-table">';
+              h += '<tr>' + cols.map(function(c) { return '<th>' + escHtml(c) + '</th>'; }).join('') + '</tr>';
+              for (var ri2 = 0; ri2 < Math.min(rows.length, 10); ri2++) {
+                var row = rows[ri2];
+                h += '<tr>';
+                for (var colIdx = 0; colIdx < cols.length; colIdx++) {
+                  var val = row[cols[colIdx]];
+                  if (typeof val === 'object' && val !== null) {
+                    h += '<td><code>' + escHtml(JSON.stringify(val).slice(0, 60)) + '</code></td>';
+                  } else {
+                    h += '<td>' + escHtml(String(val ?? '')) + '</td>';
+                  }
+                }
+                h += '</tr>';
+              }
+              if (rows.length > 10) {
+                h += '<tr><td colspan="' + cols.length + '" style="color:var(--vscode-descriptionForeground);text-align:center;">... +' + (rows.length - 10) + ' more rows</td></tr>';
+              }
+              h += '</table>';
+            }
+            return h;
+          }
+          case 'detect_changes': {
+            let h = '';
+            const files = result.files || [];
+            const syms = result.symbols || [];
+            if (files.length > 0) {
+              h += '<div class="tool-section-label">📁 Changed Files (' + files.length + ')</div>';
+              h += '<ul style="margin:0 0 4px 16px;padding:0;">';
+              for (var dfi = 0; dfi < Math.min(files.length, 8); dfi++) {
+                var df = files[dfi];
+                var dfn = typeof df === 'string' ? df : (df.filePath || df.file || df.name || '');
+                h += '<li><a class="file-link" data-file="' + escAttr(dfn) + '" data-line="1">' + escHtml(shortPath(dfn)) + '</a>';
+                if (df.status) h += ' <span class="tool-tag">' + escHtml(df.status) + '</span>';
+                h += '</li>';
+              }
+              if (files.length > 8) h += '<li style="color:var(--vscode-descriptionForeground);">+' + (files.length - 8) + ' more</li>';
+              h += '</ul>';
+            }
+            if (syms.length > 0) {
+              h += '<div class="tool-section-label">🔗 Affected Symbols (' + syms.length + ')</div>';
+              h += '<div style="display:flex;flex-wrap:wrap;gap:4px;">';
+              for (var dsi = 0; dsi < Math.min(syms.length, 12); dsi++) {
+                var ds = syms[dsi];
+                var dsn = typeof ds === 'string' ? ds : (ds.name || ds.symbol || '');
+                h += '<span class="tool-tag">' + escHtml(dsn) + '</span>';
+              }
+              if (syms.length > 12) h += '<span class="callgraph-more">+' + (syms.length - 12) + '</span>';
+              h += '</div>';
+            }
+            return h;
+          }
+          default: return '';
+        }
+      } catch (e) { return ''; }
+    }
+
+    function formatBytes(len) {
+      if (len < 1024) return len + ' B';
+      return (len / 1024).toFixed(1) + ' KB';
+    }
+
+    // ============ UTILITIES ============
+    function escHtml(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+    function escAttr(s) { return (s || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+    function shortPath(p) {
+      if (!p) return '';
+      const parts = p.replace(/\\/g, '/').split('/');
+      return parts.length > 2 ? parts.slice(-2).join('/') : p;
+    }
+
+    /**
+     * Lightweight markdown-to-HTML renderer for the answer section.
+     * Supports: headers, bold, italic, inline code, code blocks, lists, blockquotes, file path links.
+     */
+    function renderMarkdown(md) {
+      if (!md) return '';
+      let html = escHtml(md);
+
+      // Code blocks (``` ... ```)
+      html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function(_, lang, code) {
+        return '<pre><code>' + code + '</code></pre>';
+      });
+
+      // Inline code (`...`)
+      html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+      // Headers (### → h4, ## → h3, # → h2)
+      html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+      html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+      html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+      html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+      // Bold (**text**)
+      html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+      // Italic (*text*)
+      html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+
+      // Blockquotes (> text)
+      html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+
+      // Unordered lists (- item or * item)
+      html = html.replace(/^[\-\*] (.+)$/gm, '<li>$1</li>');
+      html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+
+      // Ordered lists (1. item)
+      html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+
+      // Markdown tables
+      html = html.replace(/((?:^\|.+\|$\n?){2,})/gm, function(tableBlock) {
+        const rows = tableBlock.trim().split('\n').filter(r => r.trim());
+        if (rows.length < 2) return tableBlock;
+        // Check if 2nd row is separator (|---|---|)
+        if (!/^\|[\s\-:]+(\|[\s\-:]+)+\|?$/.test(rows[1])) return tableBlock;
+
+        let thtml = '<table class="md-table">';
+        // Header row
+        const hCells = rows[0].split('|').filter((c, i, a) => i > 0 && i < a.length - 1);
+        thtml += '<thead><tr>' + hCells.map(c => '<th>' + c.trim() + '</th>').join('') + '</tr></thead>';
+        // Data rows (skip separator at index 1)
+        thtml += '<tbody>';
+        for (let i = 2; i < rows.length; i++) {
+          const cells = rows[i].split('|').filter((c, idx, a) => idx > 0 && idx < a.length - 1);
+          thtml += '<tr>' + cells.map(c => '<td>' + c.trim() + '</td>').join('') + '</tr>';
+        }
+        thtml += '</tbody></table>';
+        return thtml;
+      });
+
+      // File paths as clickable links: path/to/file.c:123 or path/to/file.c
+      html = html.replace(/([\w\/\.\-]+\.\w{1,4}):(\d+)/g, function(match, file, line) {
+        if (/\.(c|h|cpp|hpp|py|ts|js|java|rs|go|xml|json|yaml|yml|cfg|arxml)$/i.test(file)) {
+          return '<a class="file-ref" data-file="' + file + '" data-line="' + line + '">' + file + ':' + line + '</a>';
+        }
+        return match;
+      });
+
+      // Paragraphs — convert double newlines to paragraph breaks
+      html = html.replace(/\n{2,}/g, '</p><p>');
+      // Single newlines to <br> (except inside block elements)
+      html = html.replace(/\n/g, '<br>');
+
+      // Wrap in paragraph
+      html = '<p>' + html + '</p>';
+
+      // Clean up empty paragraphs
+      html = html.replace(/<p>\s*<\/p>/g, '');
+      // Fix nested block elements inside <p>
+      html = html.replace(/<p>(<h[1-4]>)/g, '$1');
+      html = html.replace(/(<\/h[1-4]>)<\/p>/g, '$1');
+      html = html.replace(/<p>(<ul>)/g, '$1');
+      html = html.replace(/(<\/ul>)<\/p>/g, '$1');
+      html = html.replace(/<p>(<pre>)/g, '$1');
+      html = html.replace(/(<\/pre>)<\/p>/g, '$1');
+      html = html.replace(/<p>(<blockquote>)/g, '$1');
+      html = html.replace(/(<\/blockquote>)<\/p>/g, '$1');
+      html = html.replace(/<p>(<table)/g, '$1');
+      html = html.replace(/(<\/table>)<\/p>/g, '$1');
+
+      return html;
+    }
+
+    function bindFileLinks(container) {
+      container.querySelectorAll('.file-link').forEach(el => {
+        el.addEventListener('click', (e) => {
+          e.preventDefault();
+          vscode.postMessage({
+            type: 'openFile',
+            filePath: el.dataset.file,
+            line: parseInt(el.dataset.line, 10) || 1
+          });
+        });
+      });
+    }
+
+    function bindSequenceToggles(container) {
+      container.querySelectorAll('.sequence-header').forEach(header => {
+        header.addEventListener('click', () => {
+          header.nextElementSibling.classList.toggle('open');
+        });
+      });
+    }
+
+    function bindToolCardToggles(container) {
+      container.querySelectorAll('.agent-tool-header[data-card-id]').forEach(header => {
+        header.addEventListener('click', () => {
+          const cardId = header.dataset.cardId;
+          const card = document.getElementById(cardId);
+          if (!card) return;
+          card.classList.toggle('expanded');
+          if (card.classList.contains('expanded') && !card.dataset.bound) {
+            card.dataset.bound = '1';
+            bindFileLinks(card);
+          }
+        });
+      });
+    }
+
+    function bindActionButtons(container) {
+      container.querySelectorAll('[data-action="investigate"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const sym = btn.dataset.symbol;
+          vscode.postMessage({ type: 'investigateDeeper', suspectId: sym });
+          showLoading('Investigating ' + sym + '...');
+        });
+      });
+      container.querySelectorAll('[data-action="generateTestChecklist"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          vscode.postMessage({ type: 'generateTestChecklist' });
+        });
+      });
+      container.querySelectorAll('[data-action="exportResults"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          vscode.postMessage({ type: 'exportResults' });
+        });
+      });
+    }
+
+    function bindAnswerToggles(container) {
+      container.querySelectorAll('[data-action="toggle-answer"]').forEach(header => {
+        header.addEventListener('click', () => {
+          const section = header.closest('.answer-section');
+          if (!section) return;
+          section.classList.toggle('open');
+          // Bind file links inside answer body on first open
+          if (section.classList.contains('open') && !section.dataset.bound) {
+            section.dataset.bound = '1';
+            const body = section.querySelector('.answer-body');
+            if (body) {
+              body.querySelectorAll('.file-ref[data-file]').forEach(el => {
+                el.addEventListener('click', (e) => {
+                  e.preventDefault();
+                  vscode.postMessage({
+                    type: 'openFile',
+                    filePath: el.dataset.file,
+                    line: parseInt(el.dataset.line, 10) || 1
+                  });
+                });
+              });
+            }
+          }
+        });
+      });
+    }
+
+    // ============ MESSAGE HANDLER ============
+    window.addEventListener('message', (event) => {
+      const msg = event.data;
+      switch (msg.type) {
+        case 'statusUpdate':
+          updateStatus(msg.status);
+          break;
+        case 'modelsLoaded':
+          populateModels(msg.models);
+          break;
+        case 'searchStarted':
+          showLoading('Searching...');
+          break;
+        case 'searchProgress':
+          $('loadingText').textContent = msg.phase + (msg.detail ? ': ' + msg.detail : '');
+          break;
+        case 'searchResults':
+          renderResults(msg.results);
+          break;
+        case 'batchProgress':
+          $('loadingText').textContent = 'Batch: ' + msg.completed + '/' + msg.total + ' — ' + msg.currentQuery;
+          break;
+        case 'batchQueueUpdate':
+          batchQueue = msg.queue || [];
+          renderBatchQueue();
+          break;
+        case 'indexProgress':
+          updateStatus({
+            state: 'indexing',
+            progress: { phase: msg.phase, percent: msg.percent, currentFile: msg.detail }
+          });
+          break;
+        case 'indexLog':
+          appendLogLine(msg.line);
+          break;
+        case 'indexLogClear':
+          clearLog();
+          $('indexLogContainer').style.display = 'block';
+          break;
+        case 'error':
+          $('loadingOverlay').style.display = 'none';
+          $('resultsSection').style.display = 'none';
+          $('emptyState').style.display = 'block';
+          $('emptyState').innerHTML = '<p style="color:var(--error);">Error: ' + escHtml(msg.message) + '</p>';
+          break;
+      }
+    });
+
+    // ============ INIT ============
+    vscode.postMessage({ type: 'checkStatus' });
+  </script>
+</body>
+</html>

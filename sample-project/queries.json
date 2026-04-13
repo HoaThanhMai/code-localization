@@ -1,0 +1,99 @@
+{
+  "description": "Sample queries for testing autosar-code-locator extension with the sample-project codebase",
+  "note": "Index this project with GitNexus first: gitnexus index /path/to/sample-project",
+
+  "search_queries": [
+    {
+      "id": "S1",
+      "type": "search",
+      "query": "How does the CAN communication flow work from application layer down to hardware?",
+      "expected_modules": ["SwcCan.c", "Rte_SwcCan.c", "Com.c", "PduR_CanIf.c", "CanIf.c", "Can.c", "Can_Hw.c"],
+      "description": "Traces the full TX path: SwcCan → RTE → Com → PduR → CanIf → Can → Can_Hw"
+    },
+    {
+      "id": "S2",
+      "type": "search",
+      "query": "What happens when a CAN frame is received? Trace the RX indication path.",
+      "expected_modules": ["Can.c", "CanIf.c", "PduR_CanIf.c", "Com.c", "Rte_SwcCan.c", "SwcCan.c"],
+      "description": "Traces the full RX path: Can_MainFunction_Read → CanIf_RxIndication → PduR → Com → RTE → SWC"
+    },
+    {
+      "id": "S3",
+      "type": "search",
+      "query": "How does NvM manage read and write operations? What states does the state machine have?",
+      "expected_modules": ["NvM.h", "NvM.c"],
+      "description": "Should find NvM_StateType enum, NvM_ReadBlock, NvM_WriteBlock, NvM_MainFunction state machine"
+    },
+    {
+      "id": "S4",
+      "type": "search",
+      "query": "How is the system initialized? What is the BSW module initialization order?",
+      "expected_modules": ["EcuM.c"],
+      "description": "Should find EcuM_Init with the initialization sequence: Det → NvM → Can → CanIf → PduR → Com → SWC"
+    },
+    {
+      "id": "S5",
+      "type": "search",
+      "query": "How does COM handle RX deadline monitoring and signal timeout?",
+      "expected_modules": ["Com.c", "Com.h", "Rte_SwcCan.c", "SwcCan.c"],
+      "description": "Should find Com_MainFunctionRx timeout logic, Rte_COMCbk_RxTimeout, SwcCan_RxTimeoutHandler"
+    },
+    {
+      "id": "S6",
+      "type": "search",
+      "query": "What critical sections (SchM) are used in the codebase and which modules use them?",
+      "expected_modules": ["SchM.h", "Can.c", "Com.c", "NvM.c"],
+      "description": "Should find SchM_Enter/Exit usage across Can, Com, and NvM modules"
+    }
+  ],
+
+  "bug_analysis_queries": [
+    {
+      "id": "B1",
+      "type": "bug_analysis",
+      "query": "Hệ thống gửi dữ liệu qua bus CAN, tầng ứng dụng luôn nhận được báo thành công. Tuy nhiên, khi phần cứng đang ở trạng thái lỗi (bus-off) hoặc bộ đệm đầy, dữ liệu vẫn không được gửi đi nhưng không có bất kỳ cảnh báo nào. Tầng trên cứ tin rằng dữ liệu đã gửi thành công. Hãy phân tích luồng gửi dữ liệu từ tầng driver phần cứng và tìm chỗ bị bỏ sót.",
+      "expected_bug": "BUG-001",
+      "severity": "HIGH",
+      "file": "src/mcal/Can/Can.c"
+    },
+    {
+      "id": "B2",
+      "type": "bug_analysis",
+      "query": "Dữ liệu lưu vào bộ nhớ không bay hơi (NV) thỉnh thoảng bị sai lệch, đặc biệt khi hệ thống đang xử lý nhiều tác vụ cùng lúc. Có vẻ như dữ liệu bị ghi đè một phần trong quá trình copy từ RAM vào NV. Hiện tượng không xảy ra liên tục mà phụ thuộc vào thời điểm — giống biểu hiện của race condition. Hãy kiểm tra module quản lý NV storage xem phần ghi dữ liệu có được bảo vệ đầy đủ không.",
+      "expected_bug": "BUG-002",
+      "severity": "CRITICAL",
+      "file": "src/services/NvM/NvM.c"
+    },
+    {
+      "id": "B3",
+      "type": "bug_analysis",
+      "query": "Tín hiệu phanh (safety-critical) được cấu hình timeout rất ngắn để phát hiện mất tín hiệu nhanh. Nhưng khi test thực tế, hệ thống mất rất lâu mới phát hiện tín hiệu bị mất — lâu hơn nhiều so với giá trị cấu hình. Có vẻ như giá trị timeout cấu hình riêng cho từng tín hiệu không được sử dụng đúng. Hãy kiểm tra module COM xem cơ chế giám sát timeout RX hoạt động như thế nào.",
+      "expected_bug": "BUG-003",
+      "severity": "HIGH",
+      "file": "src/services/Com/Com.c"
+    },
+    {
+      "id": "B4",
+      "type": "bug_analysis",
+      "query": "Hệ thống bị crash (hard fault) ngẫu nhiên khi nhận dữ liệu CAN. Hiện tượng xảy ra không thường xuyên, chỉ trong một số điều kiện nhất định. Stack trace cho thấy lỗi nằm ở tầng giao diện CAN (ECU Abstraction Layer) khi xử lý bản tin nhận được. Hãy kiểm tra hàm xử lý nhận bản tin ở tầng trừu tượng CAN xem có thiếu kiểm tra đầu vào nào không.",
+      "expected_bug": "BUG-004",
+      "severity": "CRITICAL",
+      "file": "src/ecual/CanIf/CanIf.c"
+    },
+    {
+      "id": "B5",
+      "type": "bug_analysis",
+      "query": "Sau khi hủy thao tác đọc/ghi NV storage (cancel), block bị kẹt hoàn toàn — mọi yêu cầu đọc hoặc ghi tiếp theo đều không được xử lý. Phải reset ECU mới hoạt động lại. Có vẻ như state machine quản lý NV không xử lý đúng trạng thái sau khi hủy. Hãy phân tích state machine trong hàm xử lý chính của module NV storage.",
+      "expected_bug": "BUG-005",
+      "severity": "HIGH",
+      "file": "src/services/NvM/NvM.c"
+    },
+    {
+      "id": "B6",
+      "type": "bug_analysis",
+      "query": "Hệ thống giao tiếp CAN đang có nhiều vấn đề: thỉnh thoảng mất dữ liệu gửi đi, phát hiện timeout chậm, và đôi khi bị crash khi nhận bản tin. Hãy phân tích toàn bộ luồng giao tiếp CAN từ tầng ứng dụng xuống phần cứng và tìm tất cả các lỗi tiềm ẩn.",
+      "expected_bugs": ["BUG-001", "BUG-003", "BUG-004"],
+      "description": "Broad query that should find multiple bugs across the communication stack"
+    }
+  ]
+}

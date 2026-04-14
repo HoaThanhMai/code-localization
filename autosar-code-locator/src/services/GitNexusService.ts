@@ -51,7 +51,7 @@ export class GitNexusService {
       vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ||
       '';
     this.repoName = config.get<string>('repoName', '') ||
-      (this.workspacePath ? this.workspacePath.split('/').pop()! : 'ai-contest');
+      (this.workspacePath ? path.basename(this.workspacePath) : 'ai-contest');
   }
 
   getStatus(): GitNexusStatus {
@@ -74,9 +74,10 @@ export class GitNexusService {
   }
 
   private async _connect(): Promise<void> {
+    const { command: mcpCmd, args: mcpArgs } = this.wrapCommand(['mcp']);
     const transport = new StdioClientTransport({
-      command: this.cliPath,
-      args: ['mcp'],
+      command: mcpCmd,
+      args: mcpArgs,
       cwd: this.workspacePath,
       env: { ...process.env } as Record<string, string>,
       stderr: 'pipe',
@@ -292,25 +293,50 @@ export class GitNexusService {
   }
 
   /**
-   * Resolve the gitnexus binary to an absolute path.
+   * Resolve the gitnexus binary to an absolute path, cross-platform.
    */
   private resolveCliPath(configuredPath: string): string {
-    if (configuredPath.startsWith('/') || configuredPath.includes('/')) {
+    if (path.isAbsolute(configuredPath)) {
       return configuredPath;
     }
+    const isWindows = process.platform === 'win32';
     try {
-      const resolved = execSync(`which ${configuredPath}`, {
-        encoding: 'utf-8',
-        timeout: 5000,
-      }).trim();
+      // Use `where` on Windows, `which` on Unix
+      const finder = isWindows ? `where ${configuredPath}` : `which ${configuredPath}`;
+      const raw = execSync(finder, { encoding: 'utf-8', timeout: 5000 });
+      // `where` can return multiple matches — take the first non-empty line
+      const resolved = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean)[0];
       if (resolved) {
         console.log(`[GitNexus] Resolved CLI path: ${resolved}`);
         return resolved;
       }
     } catch {
-      // which failed — fall back to configured path
+      // finder failed — fall through to platform-specific fallbacks
+    }
+    if (isWindows) {
+      // npm global installs on Windows live in %APPDATA%\npm
+      const appData = process.env.APPDATA;
+      if (appData) {
+        const candidate = path.join(appData, 'npm', `${configuredPath}.cmd`);
+        if (fs.existsSync(candidate)) {
+          console.log(`[GitNexus] Found Windows npm global: ${candidate}`);
+          return candidate;
+        }
+      }
     }
     return configuredPath;
+  }
+
+  /**
+   * Wrap the CLI command + args to handle Windows .cmd/.bat files.
+   * On Windows, .cmd files must be launched via `cmd.exe /c`.
+   */
+  private wrapCommand(args: string[]): { command: string; args: string[] } {
+    const isWindows = process.platform === 'win32';
+    if (isWindows && /\.(cmd|bat)$/i.test(this.cliPath)) {
+      return { command: 'cmd.exe', args: ['/c', this.cliPath, ...args] };
+    }
+    return { command: this.cliPath, args };
   }
 
   /**
@@ -322,7 +348,8 @@ export class GitNexusService {
     onLine: (line: string) => void
   ): Promise<void> {
     return new Promise((resolve, reject) => {
-      const proc = spawn(this.cliPath, args, {
+      const { command, args: wrappedArgs } = this.wrapCommand(args);
+      const proc = spawn(command, wrappedArgs, {
         cwd,
         shell: false,
         env: { ...process.env },

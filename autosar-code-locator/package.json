@@ -90,6 +90,9 @@
     "github.copilot-chat"
   ],
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "highlight.js": "^11.11.1",
+    "marked": "^18.0.0",
+    "prismjs": "^1.30.0"
   }
 }

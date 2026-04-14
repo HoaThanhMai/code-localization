@@ -92,6 +92,8 @@ export interface SearchResult {
 
 interface ProgressCallback {
   onProgress?: (phase: string, detail?: string) => void;
+  /** Called for each token chunk during narrative answer generation (streaming). */
+  onAnswerChunk?: (chunk: string) => void;
 }
 
 interface BatchCallbacks {
@@ -133,7 +135,7 @@ export interface AgentStep {
 
 // ============ QueryEngine ============
 
-const { absoluteMaxIterations: ABSOLUTE_MAX_ITERATIONS, defaultIterations: DEFAULT_ITERATIONS, maxEvidenceTokens: MAX_EVIDENCE_TOKENS } = AGENT_CONFIG;
+const { absoluteMaxIterations: ABSOLUTE_MAX_ITERATIONS, defaultIterations: DEFAULT_ITERATIONS } = AGENT_CONFIG;
 
 export class QueryEngine {
   private lastResults: SearchResult | null = null;
@@ -144,6 +146,36 @@ export class QueryEngine {
     private copilot: CopilotLMService
   ) {}
 
+  // ============ Dynamic Limits (per-model context window) ============
+
+  /**
+   * Computes conversation/evidence size limits based on the currently selected model's
+   * real context window (from vscode.LanguageModelChat.maxInputTokens).
+   *
+   * Examples at model selection time:
+   *   claude-sonnet-4.x  → 160 000 tokens → usableChars ~392 000
+   *   gpt-4o             → 128 000 tokens → usableChars ~313 600
+   *   gpt-4-turbo        →  32 000 tokens → usableChars  ~78 400
+   */
+  private getDynamicLimits() {
+    const ctxTokens = this.copilot.getModelContextWindow();
+    const charsPerToken = 3.5; // conservative for mixed C code + English text
+    const usableChars = Math.floor(ctxTokens * charsPerToken * 0.70); // 70% usable; rest for output + overhead
+    const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+    return {
+      /** Total conversation size before compaction kicks in */
+      maxConversationChars: clamp(usableChars, 60_000, 600_000),
+      /** Evidence summary passed to LLM prompts */
+      maxEvidenceChars: clamp(Math.floor(usableChars * 0.50), 30_000, 250_000),
+      /** Per tool result in conversation messages */
+      toolResultTruncateChars: clamp(Math.floor(usableChars / 30), 2_000, 20_000),
+      /** Per entry in summarizeEvidence() */
+      evidencePerEntryChars: clamp(Math.floor(usableChars / 20), 2_000, 20_000),
+      /** Chars kept per compacted turn summary */
+      compactPreviewChars: clamp(Math.floor(usableChars / 100), 500, 4_000),
+    };
+  }
+
   // ============ Main Agent Loop (Inline Multi-Turn) ============
 
   async search(
@@ -153,7 +185,6 @@ export class QueryEngine {
   ): Promise<SearchResult> {
     const startTime = Date.now();
     const evidence: Record<string, unknown> = {};
-    const trace: AgentStep[] = [];
 
     // --- Phase 1: Initial broad search + auto-read source files ---
     callbacks.onProgress?.('Phase 1: Searching knowledge graph...');
@@ -179,26 +210,140 @@ export class QueryEngine {
       }
     }
 
-    // --- Phase 2: Inline agent conversation ---
-    // Like Pure Copilot: one continuous conversation where the LLM plans, calls tools,
-    // and produces final analysis — all in one multi-turn flow.
-    const maxTurns = DEFAULT_ITERATIONS[queryType] ?? 4;
+    // --- Phase 2: Inline agent investigation ---
+    callbacks.onProgress?.('Phase 2: Agent investigation...');
+    const { inlineAnalysis, trace, agentFinalReasoning } = await this.runInlineAgentLoop({
+      query, queryType, evidence, callbacks,
+    });
+
+    // --- Phase 3: Narrative answer (parallel with final turn or post-hoc) ---
+    let synthesized: { sequences: ExecutionSequence[]; symbols: SymbolResult[]; clusters: ClusterInfo[]; answer: string };
+    let investigation: InvestigationReport | undefined;
+
+    const finalEvidenceSummary = this.summarizeEvidence(evidence);
+    const reasoningTrace = trace.map((s) =>
+      `Turn ${s.iteration}: ${s.reasoning} → called ${s.toolCalls.map((tc) => tc.tool).join(', ') || 'nothing'}`
+    ).join('\n');
+
+    if (inlineAnalysis) {
+      // Agent produced analysis inline — just need the narrative
+      callbacks.onProgress?.('Generating narrative answer...');
+      let narrative = '';
+      try {
+        narrative = await this.generateNarrativeAnswer(query, queryType, finalEvidenceSummary, reasoningTrace, agentFinalReasoning, callbacks);
+      } catch {
+        // Narrative is nice-to-have, not critical
+      }
+
+      synthesized = {
+        sequences: (inlineAnalysis.sequences as ExecutionSequence[]) ?? [],
+        symbols: (inlineAnalysis.symbols as SymbolResult[]) ?? [],
+        clusters: (inlineAnalysis.clusters as ClusterInfo[]) ?? [],
+        answer: narrative,
+      };
+
+      if (queryType === 'bug_analysis') {
+        const impactEntries = Object.entries(evidence)
+          .filter(([k]) => k.startsWith('impact_'))
+          .map(([, v]) => v);
+        const mainSeq = synthesized.sequences[0] ?? {
+          name: 'unknown', priority: 0, steps: [], processType: 'within_community' as const, confidence: 0,
+        };
+        investigation = {
+          executionPath: mainSeq,
+          suspectPoints: (inlineAnalysis.suspectPoints as SuspectPoint[]) ?? [],
+          suggestions: (inlineAnalysis.suggestions as InvestigationSuggestion[]) ?? [],
+          blastRadius: (impactEntries[0] as BlastRadiusInfo) ?? { target: '', direction: 'both' as const, affected: [], riskLevel: 'low' as const },
+          testChecklist: (inlineAnalysis.testChecklist as string[]) ?? [],
+          summary: narrative,
+        };
+      }
+    } else {
+      // Agent didn't produce inline analysis — fall back to separate synthesis
+      callbacks.onProgress?.('Phase 3: Synthesizing results...');
+      if (queryType === 'bug_analysis') {
+        const [combinedResult, narrativeResult] = await Promise.allSettled([
+          this.agentCombinedBugAnalysis(query, evidence, trace),
+          this.generateNarrativeAnswer(query, queryType, finalEvidenceSummary, reasoningTrace, agentFinalReasoning, callbacks),
+        ]);
+        const combined = combinedResult.status === 'fulfilled'
+          ? combinedResult.value
+          : { sequences: [] as ExecutionSequence[], symbols: [] as SymbolResult[], clusters: [] as ClusterInfo[], answer: '', investigation: { executionPath: { name: '', priority: 0, steps: [], processType: 'within_community' as const, confidence: 0 }, suspectPoints: [], suggestions: [{ text: 'Analysis failed' }], blastRadius: { target: '', direction: 'both' as const, affected: [], riskLevel: 'low' as const }, testChecklist: [] } as InvestigationReport };
+        const narrative = narrativeResult.status === 'fulfilled' ? narrativeResult.value : '';
+        synthesized = { sequences: combined.sequences, symbols: combined.symbols, clusters: combined.clusters, answer: narrative || combined.answer };
+        investigation = combined.investigation;
+        if (investigation) { investigation.summary = synthesized.answer; }
+      } else {
+        synthesized = await this.agentSynthesize(query, queryType, evidence, trace, callbacks);
+        if (queryType === 'impact' && synthesized.symbols.length > 0) {
+          investigation = await this.agentImpactAnalysis(synthesized.symbols[0].symbolName, evidence);
+        }
+      }
+    }
+
+    const results: SearchResult = {
+      query,
+      type: queryType as SearchResult['type'],
+      sequences: synthesized.sequences,
+      symbols: synthesized.symbols,
+      clusters: synthesized.clusters,
+      answer: synthesized.answer,
+      investigation,
+      agentTrace: trace,
+      metadata: {
+        durationMs: Date.now() - startTime,
+        model: this.copilot.getSelectedModelId(),
+        providersUsed: ['gitnexus', 'copilot-lm'],
+      },
+    };
+
+    this.lastResults = results;
+    return results;
+  }
+
+  // ============ Inline Agent Loop (reusable core) ============
+
+  /**
+   * Core inline multi-turn agent loop. Used by both search() and investigateDeeper().
+   * The LLM drives tool calls across turns, building evidence until it produces a final analysis.
+   *
+   * @param params.evidence  Pre-seeded evidence (e.g. from Phase 1 search). Mutated in-place.
+   * @returns inlineAnalysis — structured JSON from the agent's final turn (or null if not produced)
+   *          trace          — per-turn reasoning + tool call history (for agentTrace / reasoningTrace)
+   *          agentFinalReasoning — the agent's last "reasoning" string (conclusions, used for narrative)
+   */
+  private async runInlineAgentLoop(params: {
+    query: string;
+    queryType: string;
+    evidence: Record<string, unknown>;
+    callbacks: ProgressCallback;
+    maxTurnsOverride?: number;
+  }): Promise<{
+    inlineAnalysis: Record<string, unknown> | null;
+    trace: AgentStep[];
+    agentFinalReasoning: string;
+  }> {
+    const { query, queryType, evidence, callbacks } = params;
+    const limits = this.getDynamicLimits();
+    const maxTurns = params.maxTurnsOverride ?? (DEFAULT_ITERATIONS[queryType] ?? 4);
     const systemPrompt = queryType === 'bug_analysis' ? AUTOSAR_BUG_ANALYSIS_PROMPT : AGENT_SYSTEM_PROMPT;
-    const evidenceSummary = this.summarizeEvidence(evidence);
+    const evidenceSummary = this.summarizeEvidence(evidence, limits.maxEvidenceChars);
     const initialPrompt = buildInlineAgentPrompt({ query, queryType, evidenceSummary, maxTurns });
 
-    // Build conversation as role+content pairs
+    // System prompt is passed separately to chatMultiTurn() so it becomes a proper System message.
     const conversation: Array<{ role: 'user' | 'assistant'; content: string }> = [
-      { role: 'user', content: `${systemPrompt}\n\n${initialPrompt}` },
+      { role: 'user', content: initialPrompt },
     ];
 
+    const trace: AgentStep[] = [];
     let inlineAnalysis: Record<string, unknown> | null = null;
     let effectiveMaxTurns = maxTurns;
+    let agentFinalReasoning = '';
 
     for (let turn = 1; turn <= effectiveMaxTurns; turn++) {
-      callbacks.onProgress?.(`Phase 2: Agent turn ${turn}/${effectiveMaxTurns}...`);
+      callbacks.onProgress?.(`Agent turn ${turn}/${effectiveMaxTurns}...`);
 
-      const response = await this.copilot.chatMultiTurn(conversation);
+      const response = await this.copilot.chatMultiTurn(conversation, systemPrompt);
       conversation.push({ role: 'assistant', content: response });
 
       let parsed: Record<string, unknown>;
@@ -226,6 +371,7 @@ export class QueryEngine {
 
       // If agent says done or this is the last turn, capture analysis
       if (parsed.done || turn === effectiveMaxTurns) {
+        agentFinalReasoning = String(parsed.reasoning ?? '');
         trace.push(step);
         if (parsed.sequences || parsed.suspectPoints || parsed.symbols) {
           inlineAnalysis = parsed;
@@ -274,8 +420,8 @@ export class QueryEngine {
         evidence[key] = r.result;
       }
 
-      // Auto-read source files discovered from graph results (bug_analysis, first N turns)
-      if (queryType === 'bug_analysis' && turn <= AGENT_CONFIG.autoReadMaxTurn) {
+      // Auto-read source files discovered from graph results in bug_analysis mode (all turns)
+      if (queryType === 'bug_analysis') {
         const autoFiles = this.extractFilePathsFromEvidence(results, evidence);
         if (autoFiles.length > 0) {
           callbacks.onProgress?.(`Auto-reading ${autoFiles.length} source file(s)...`);
@@ -298,7 +444,7 @@ export class QueryEngine {
       // Build next user message with tool results
       const resultsSummary = results.map((r) => {
         const json = JSON.stringify(r.result, null, 2);
-        const truncated = json.length > AGENT_CONFIG.toolResultTruncateChars ? json.slice(0, AGENT_CONFIG.toolResultTruncateChars) + '...(truncated)' : json;
+        const truncated = json.length > limits.toolResultTruncateChars ? json.slice(0, limits.toolResultTruncateChars) + '...(truncated)' : json;
         return `### ${r.tool}(${JSON.stringify(r.args)})\n<result>\n${truncated}\n</result>`;
       }).join('\n\n');
 
@@ -310,116 +456,31 @@ export class QueryEngine {
       }
 
       // Context length guard: if conversation is getting too long, compact old turns
-      const MAX_CONVERSATION_CHARS = AGENT_CONFIG.maxConversationChars;
       const totalChars = conversation.reduce((s, t) => s + t.content.length, 0) + nextMsg.length;
-      if (totalChars > MAX_CONVERSATION_CHARS && conversation.length >= 3) {
-        console.warn(`[QueryEngine] Conversation too long (${(totalChars / 1000).toFixed(1)}K chars), compacting old turns`);
-        // Keep: first user message (system + prompt) + last assistant + new user message
-        // Compact middle turns into a brief summary
+      if (totalChars > limits.maxConversationChars && conversation.length >= 3) {
+        console.warn(`[QueryEngine] Conversation too long (${(totalChars / 1000).toFixed(1)}K chars, limit ${(limits.maxConversationChars / 1000).toFixed(0)}K), compacting old turns`);
+        // Keep: first user message (initial prompt) + last assistant + new user message
         const middleTurns = conversation.slice(1, -1);
         const compactSummary = middleTurns.map((t, i) => {
-          const preview = t.content.slice(0, AGENT_CONFIG.compactTurnPreviewChars).replace(/\n/g, ' ');
+          const preview = t.content.slice(0, limits.compactPreviewChars).replace(/\n/g, ' ');
           return `[${t.role} ${i + 1}]: ${preview}...`;
         }).join('\n');
-        // Replace middle turns with one compact summary
         const firstMsg = conversation[0];
         const lastMsg = conversation[conversation.length - 1];
         conversation.length = 0;
         conversation.push(firstMsg);
         conversation.push({ role: 'user', content: `## Compacted History (turns 1-${turn - 1})\n${compactSummary}` });
         conversation.push(lastMsg);
-        console.log(`[QueryEngine] Compacted to ${conversation.reduce((s, t) => s + t.content.length, 0 / 1000).toFixed(1)}K chars`);
+        console.log(`[QueryEngine] Compacted to ${(conversation.reduce((s, t) => s + t.content.length, 0) / 1000).toFixed(1)}K chars`);
       }
 
       conversation.push({ role: 'user', content: nextMsg });
     }
 
-    // --- Phase 3: Narrative answer (parallel with final turn or post-hoc) ---
-    let synthesized: { sequences: ExecutionSequence[]; symbols: SymbolResult[]; clusters: ClusterInfo[]; answer: string };
-    let investigation: InvestigationReport | undefined;
-
-    const finalEvidenceSummary = this.summarizeEvidence(evidence);
-    const reasoningTrace = trace.map((s) =>
-      `Turn ${s.iteration}: ${s.reasoning} → called ${s.toolCalls.map((tc) => tc.tool).join(', ') || 'nothing'}`
-    ).join('\n');
-
-    if (inlineAnalysis) {
-      // Agent produced analysis inline — just need the narrative
-      callbacks.onProgress?.('Generating narrative answer...');
-      let narrative = '';
-      try {
-        narrative = await this.generateNarrativeAnswer(query, queryType, finalEvidenceSummary, reasoningTrace);
-      } catch {
-        // Narrative is nice-to-have, not critical
-      }
-
-      synthesized = {
-        sequences: (inlineAnalysis.sequences as ExecutionSequence[]) ?? [],
-        symbols: (inlineAnalysis.symbols as SymbolResult[]) ?? [],
-        clusters: (inlineAnalysis.clusters as ClusterInfo[]) ?? [],
-        answer: narrative,
-      };
-
-      if (queryType === 'bug_analysis') {
-        const impactEntries = Object.entries(evidence)
-          .filter(([k]) => k.startsWith('impact_'))
-          .map(([, v]) => v);
-        const mainSeq = synthesized.sequences[0] ?? {
-          name: 'unknown', priority: 0, steps: [], processType: 'within_community' as const, confidence: 0,
-        };
-        investigation = {
-          executionPath: mainSeq,
-          suspectPoints: (inlineAnalysis.suspectPoints as SuspectPoint[]) ?? [],
-          suggestions: (inlineAnalysis.suggestions as InvestigationSuggestion[]) ?? [],
-          blastRadius: (impactEntries[0] as BlastRadiusInfo) ?? { target: '', direction: 'both' as const, affected: [], riskLevel: 'low' as const },
-          testChecklist: (inlineAnalysis.testChecklist as string[]) ?? [],
-          summary: narrative,
-        };
-      }
-    } else {
-      // Agent didn't produce inline analysis — fall back to separate synthesis
-      callbacks.onProgress?.('Phase 3: Synthesizing results...');
-      if (queryType === 'bug_analysis') {
-        const [combinedResult, narrativeResult] = await Promise.allSettled([
-          this.agentCombinedBugAnalysis(query, evidence, trace),
-          this.generateNarrativeAnswer(query, queryType, finalEvidenceSummary, reasoningTrace),
-        ]);
-        const combined = combinedResult.status === 'fulfilled'
-          ? combinedResult.value
-          : { sequences: [] as ExecutionSequence[], symbols: [] as SymbolResult[], clusters: [] as ClusterInfo[], answer: '', investigation: { executionPath: { name: '', priority: 0, steps: [], processType: 'within_community' as const, confidence: 0 }, suspectPoints: [], suggestions: [{ text: 'Analysis failed' }], blastRadius: { target: '', direction: 'both' as const, affected: [], riskLevel: 'low' as const }, testChecklist: [] } as InvestigationReport };
-        const narrative = narrativeResult.status === 'fulfilled' ? narrativeResult.value : '';
-        synthesized = { sequences: combined.sequences, symbols: combined.symbols, clusters: combined.clusters, answer: narrative || combined.answer };
-        investigation = combined.investigation;
-        if (investigation) { investigation.summary = synthesized.answer; }
-      } else {
-        synthesized = await this.agentSynthesize(query, queryType, evidence, trace);
-        if (queryType === 'impact' && synthesized.symbols.length > 0) {
-          investigation = await this.agentImpactAnalysis(synthesized.symbols[0].symbolName, evidence);
-        }
-      }
-    }
-
-    const results: SearchResult = {
-      query,
-      type: queryType as SearchResult['type'],
-      sequences: synthesized.sequences,
-      symbols: synthesized.symbols,
-      clusters: synthesized.clusters,
-      answer: synthesized.answer,
-      investigation,
-      agentTrace: trace,
-      metadata: {
-        durationMs: Date.now() - startTime,
-        model: this.copilot.getSelectedModelId(),
-        providersUsed: ['gitnexus', 'copilot-lm'],
-      },
-    };
-
-    this.lastResults = results;
-    return results;
+    return { inlineAnalysis, trace, agentFinalReasoning };
   }
 
-  // ============ Agent Planning ============
+  // ============ Agent Planning (legacy — used only internally) ============
 
   private async agentPlan(
     query: string,
@@ -489,7 +550,8 @@ export class QueryEngine {
     query: string,
     queryType: string,
     evidence: Record<string, unknown>,
-    trace: AgentStep[]
+    trace: AgentStep[],
+    callbacks: ProgressCallback = {},
   ): Promise<{
     sequences: ExecutionSequence[];
     symbols: SymbolResult[];
@@ -519,7 +581,7 @@ export class QueryEngine {
           clusters: parsed.clusters ?? [],
         };
       })(),
-      this.generateNarrativeAnswer(query, queryType, evidenceSummary, reasoningTrace),
+      this.generateNarrativeAnswer(query, queryType, evidenceSummary, reasoningTrace, '', callbacks),
     ]);
 
     const structured = structuredResult.status === 'fulfilled'
@@ -540,12 +602,17 @@ export class QueryEngine {
 
   /**
    * Generates a human-readable narrative answer explaining the results to the user.
+   * @param agentConclusions  The agent's final "reasoning" field — its own synthesis/conclusions.
+   *                          Passed to the narrative prompt so the LLM builds on the agent's work
+   *                          rather than starting from scratch.
    */
   private async generateNarrativeAnswer(
     query: string,
     queryType: string,
     evidenceSummary: string,
     reasoningTrace: string,
+    agentConclusions: string = '',
+    callbacks: ProgressCallback = {},
   ): Promise<string> {
     const answerPrompt = buildNarrativeAnswerPrompt({
       query,
@@ -553,9 +620,14 @@ export class QueryEngine {
       seqSummary: '',
       symSummary: '',
       evidenceSummary,
+      agentConclusions,
     });
 
     try {
+      if (callbacks.onAnswerChunk) {
+        // Stream mode: push each token chunk to the callback
+        return await this.copilot.chatStream(AGENT_SYSTEM_PROMPT, answerPrompt, callbacks.onAnswerChunk);
+      }
       return await this.copilot.chat(AGENT_SYSTEM_PROMPT, answerPrompt);
     } catch (e) {
       console.error('[QueryEngine] generateNarrativeAnswer failed:', e instanceof Error ? e.message : e);
@@ -758,8 +830,9 @@ export class QueryEngine {
   }
 
   private summarizeEvidence(evidence: Record<string, unknown>, maxChars?: number): string {
-    const limit = maxChars ?? MAX_EVIDENCE_TOKENS * 4;
-    const perEntryLimit = Math.min(AGENT_CONFIG.evidencePerEntryChars, Math.floor(limit / Math.max(Object.keys(evidence).length, 1)));
+    const dynLimits = this.getDynamicLimits();
+    const limit = maxChars ?? dynLimits.maxEvidenceChars;
+    const perEntryLimit = Math.min(dynLimits.evidencePerEntryChars, Math.floor(limit / Math.max(Object.keys(evidence).length, 1)));
     const parts: string[] = [];
     let totalLength = 0;
 
@@ -944,66 +1017,101 @@ export class QueryEngine {
     const startTime = Date.now();
     const evidence: Record<string, unknown> = {};
 
-    callbacks.onProgress?.('Getting 360° context for ' + suspectSymbol);
-    evidence['context_target'] = await this.safeCallTool('context', { name: suspectSymbol });
+    // Pre-seed evidence: run context + impact + config query in parallel
+    callbacks.onProgress?.(`Pre-seeding evidence for ${suspectSymbol}...`);
+    const [contextResult, impactResult, configResult] = await Promise.all([
+      this.safeCallTool('context', { name: suspectSymbol }),
+      this.safeCallTool('impact', { target: suspectSymbol, direction: 'both', maxDepth: 3 }),
+      this.safeCallTool('query', { query: `${suspectSymbol} configuration initialization error handling` }),
+    ]);
+    evidence['context_target'] = contextResult;
+    evidence['impact_target'] = impactResult;
+    evidence['query_config'] = configResult;
 
-    callbacks.onProgress?.('Analyzing upstream impact...');
-    evidence['impact_target'] = await this.safeCallTool('impact', {
-      target: suspectSymbol,
-      direction: 'upstream',
-      maxDepth: 3,
-    });
-
-    callbacks.onProgress?.('Searching config dependencies...');
-    evidence['query_config'] = await this.safeCallTool('query', {
-      query: `${suspectSymbol} configuration parameter`,
-    });
-
-    // Let agent decide if more investigation is needed
-    callbacks.onProgress?.('Agent deciding next steps...');
-    const plan = await this.agentPlan(
-      `Deep investigation of ${suspectSymbol}`,
-      'bug_analysis',
-      evidence,
-      1
+    // Auto-read source files discovered from the context result
+    const autoFiles = this.extractFilePathsFromEvidence(
+      [{ tool: 'context', args: { name: suspectSymbol }, result: contextResult }],
+      evidence
     );
-
-    if (!plan.done && plan.toolCalls.length > 0) {
-      callbacks.onProgress?.('Agent gathering additional evidence...');
-      const additionalResults = await Promise.all(
-        plan.toolCalls.map(async (tc) => {
-          const result = await this.safeCallTool(tc.tool, tc.args);
-          return { tool: tc.tool, args: tc.args, result };
+    if (autoFiles.length > 0) {
+      callbacks.onProgress?.(`Auto-reading ${autoFiles.length} source file(s)...`);
+      const autoReads = await Promise.all(
+        autoFiles.map(async (af) => {
+          const result = await this.safeCallTool('read_file', { filePath: af.filePath, startLine: af.startLine, endLine: af.endLine });
+          return { filePath: af.filePath, result };
         })
       );
-      for (const r of additionalResults) {
-        const key = `${r.tool}_${Object.values(r.args).join('_')}`.slice(0, 80);
+      for (const r of autoReads) {
+        const key = `read_file_${r.filePath.replace(/\//g, '_')}`.slice(0, 80);
         evidence[key] = r.result;
       }
     }
 
-    callbacks.onProgress?.('LLM deep analysis...');
-    const deepPrompt = buildDeepInvestigationPrompt(suspectSymbol, this.summarizeEvidence(evidence));
+    // Run the full inline agent loop — same depth as main search, with max budget
+    callbacks.onProgress?.('Deep investigation agent starting...');
+    const deepQuery = `Forensic deep investigation of "${suspectSymbol}": trace ALL callers and callees, check ALL error paths and return value propagation, verify configuration dependencies in Cfg.h/PBcfg.c, identify concurrency and reentrancy risks with SchM, map state machine transitions, check initialization order`;
+    const { inlineAnalysis, trace, agentFinalReasoning } = await this.runInlineAgentLoop({
+      query: deepQuery,
+      queryType: 'bug_analysis',
+      evidence,
+      callbacks,
+      maxTurnsOverride: ABSOLUTE_MAX_ITERATIONS,
+    });
 
-    const response = await this.copilot.chat(AUTOSAR_BUG_ANALYSIS_PROMPT, deepPrompt);
-    const parsed = this.parseJson(response);
+    const finalEvidenceSummary = this.summarizeEvidence(evidence);
+    const reasoningTrace = trace.map((s) =>
+      `Turn ${s.iteration}: ${s.reasoning} → called ${s.toolCalls.map((tc) => tc.tool).join(', ') || 'nothing'}`
+    ).join('\n');
+
+    callbacks.onProgress?.('Generating narrative...');
+    let narrative = '';
+    try {
+      narrative = await this.generateNarrativeAnswer(`Deep investigation: ${suspectSymbol}`, 'bug_analysis', finalEvidenceSummary, reasoningTrace, agentFinalReasoning);
+    } catch { /* narrative is nice-to-have */ }
+
+    const impactEntries = Object.entries(evidence)
+      .filter(([k]) => k.startsWith('impact_'))
+      .map(([, v]) => v);
+
+    const sequences = (inlineAnalysis?.sequences as ExecutionSequence[]) ?? this.lastResults?.sequences ?? [];
+    const suspectPoints = (inlineAnalysis?.suspectPoints as SuspectPoint[]) ?? [];
+    const suggestions = (inlineAnalysis?.suggestions as InvestigationSuggestion[]) ?? [];
+    const testChecklist = (inlineAnalysis?.testChecklist as string[]) ?? [];
+
+    // If the agent didn't produce inline analysis, fall back to the deep investigation prompt
+    if (!inlineAnalysis) {
+      callbacks.onProgress?.('Running deep investigation fallback...');
+      try {
+        const deepPrompt = buildDeepInvestigationPrompt(suspectSymbol, finalEvidenceSummary);
+        const response = await this.copilot.chat(AUTOSAR_BUG_ANALYSIS_PROMPT, deepPrompt);
+        const parsed = this.parseJson(response);
+        suspectPoints.push(...(parsed.suspectPoints ?? []));
+        suggestions.push(...(parsed.suggestions ?? []));
+        testChecklist.push(...(parsed.testChecklist ?? []));
+      } catch (e) {
+        console.error('[QueryEngine] investigateDeeper fallback failed:', e instanceof Error ? e.message : e);
+      }
+    }
 
     const results: SearchResult = {
       query: `Deep investigation: ${suspectSymbol}`,
       type: 'bug_analysis',
-      sequences: this.lastResults?.sequences ?? [],
-      symbols: this.lastResults?.symbols ?? [],
-      clusters: this.lastResults?.clusters ?? [],
+      sequences,
+      symbols: (inlineAnalysis?.symbols as SymbolResult[]) ?? this.lastResults?.symbols ?? [],
+      clusters: (inlineAnalysis?.clusters as ClusterInfo[]) ?? this.lastResults?.clusters ?? [],
+      answer: narrative,
+      agentTrace: trace,
       investigation: {
-        executionPath: this.lastResults?.investigation?.executionPath ?? {
+        executionPath: sequences[0] ?? {
           name: '', priority: 0, steps: [], processType: 'within_community', confidence: 0,
         },
-        suspectPoints: parsed.suspectPoints ?? [],
-        suggestions: parsed.suggestions ?? [],
-        blastRadius: (evidence['impact_target'] as BlastRadiusInfo) ?? {
-          target: suspectSymbol, direction: 'both', affected: [], riskLevel: 'low',
+        suspectPoints,
+        suggestions,
+        blastRadius: (impactEntries[0] as BlastRadiusInfo) ?? {
+          target: suspectSymbol, direction: 'both' as const, affected: [], riskLevel: 'low' as const,
         },
-        testChecklist: parsed.testChecklist ?? [],
+        testChecklist,
+        summary: narrative,
       },
       metadata: {
         durationMs: Date.now() - startTime,

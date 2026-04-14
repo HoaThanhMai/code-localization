@@ -4,7 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';" />
+    content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${cspSource};" />
+  <link rel="stylesheet" href="${prismThemeUri}" />
   <title>AUTOSAR Code Locator</title>
   <style>
     :root {
@@ -432,6 +433,22 @@
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 12px; line-height: 1.5; margin: 6px 0;
     }
+    /* Prism-highlighted code blocks — inherit background from prism-tomorrow theme */
+    .answer-body pre[class*="language-"],
+    #liveStreamBody pre[class*="language-"] {
+      margin: 8px 0;
+      border-radius: 5px;
+      font-size: 12px;
+      line-height: 1.5;
+      overflow-x: auto;
+    }
+    .answer-body code[class*="language-"],
+    #liveStreamBody code[class*="language-"] {
+      font-family: var(--vscode-editor-font-family, 'Fira Code', 'Cascadia Code', Consolas, monospace);
+      font-size: 12px;
+      background: none;
+      padding: 0;
+    }
     .answer-body blockquote {
       border-left: 3px solid var(--link);
       padding-left: 10px; margin: 6px 0;
@@ -439,17 +456,25 @@
     }
     .answer-body strong { color: var(--fg); }
     .answer-body table.md-table,
-    .answer-body .md-table {
+    .answer-body .md-table,
+    .answer-body table,
+    #liveStreamBody table {
       width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0;
     }
-    .answer-body .md-table th {
+    .answer-body .md-table th,
+    .answer-body table th,
+    #liveStreamBody table th {
       text-align: left; padding: 5px 8px; border-bottom: 2px solid var(--border);
       font-weight: 600; background: var(--vscode-editorWidget-background, var(--input-bg));
     }
-    .answer-body .md-table td {
+    .answer-body .md-table td,
+    .answer-body table td,
+    #liveStreamBody table td {
       padding: 4px 8px; border-bottom: 1px solid var(--border);
     }
-    .answer-body .md-table tr:hover {
+    .answer-body .md-table tr:hover,
+    .answer-body table tr:hover,
+    #liveStreamBody table tr:hover {
       background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.04));
     }
     .answer-body .file-ref {
@@ -457,8 +482,59 @@
     }
     .answer-body .file-ref:hover { text-decoration: underline; }
 
-    .spinner {
-      display: inline-block; width: 20px; height: 20px;
+    /* ============ Live Stream Section ============ */
+    #liveStreamSection {
+      display: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 14px;
+      overflow: hidden;
+    }
+    #liveStreamSection.visible { display: block; }
+    .stream-header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 12px;
+      background: var(--vscode-editorWidget-background, var(--input-bg));
+      font-weight: 600; font-size: 13px;
+    }
+    .stream-cursor {
+      display: inline-block; width: 2px; height: 14px;
+      background: var(--btn-bg); margin-left: 2px; vertical-align: middle;
+      animation: blink 0.8s step-end infinite;
+    }
+    @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+    #liveStreamBody {
+      padding: 12px 14px;
+      font-size: 13px; line-height: 1.7;
+      color: var(--fg);
+      max-height: 400px; overflow-y: auto;
+    }
+    #liveStreamBody h1, #liveStreamBody h2, #liveStreamBody h3, #liveStreamBody h4 {
+      margin: 10px 0 4px; font-size: 13px; color: var(--link);
+    }
+    #liveStreamBody h2 { font-size: 14px; }
+    #liveStreamBody h1 { font-size: 15px; }
+    #liveStreamBody p { margin: 4px 0 8px; }
+    #liveStreamBody ul, #liveStreamBody ol { padding-left: 20px; margin: 4px 0 8px; }
+    #liveStreamBody li { margin: 2px 0; }
+    #liveStreamBody code {
+      background: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.06));
+      padding: 1px 4px; border-radius: 3px;
+      font-family: var(--vscode-editor-font-family, monospace); font-size: 12px;
+    }
+    #liveStreamBody pre {
+      background: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.06));
+      padding: 8px 10px; border-radius: 4px; overflow-x: auto;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 12px; line-height: 1.5; margin: 6px 0;
+    }
+    #liveStreamBody blockquote {
+      border-left: 3px solid var(--link); padding-left: 10px; margin: 6px 0;
+      color: var(--vscode-descriptionForeground);
+    }
+    #liveStreamBody strong { color: var(--fg); }
+
+    .spinner {      display: inline-block; width: 20px; height: 20px;
       border: 2px solid var(--border); border-top-color: var(--btn-bg);
       border-radius: 50%; animation: spin 0.8s linear infinite;
     }
@@ -547,6 +623,15 @@
     </div>
   </div>
 
+  <!-- ============ LIVE STREAM SECTION (shown during narrative generation) ============ -->
+  <div id="liveStreamSection">
+    <div class="stream-header">
+      <span>✍️ Đang phân tích</span>
+      <span id="streamCursor" class="stream-cursor"></span>
+    </div>
+    <div id="liveStreamBody"></div>
+  </div>
+
   <!-- ============ RESULTS ============ -->
   <div class="results-section" id="resultsSection" style="display:none">
     <div class="results-header">
@@ -586,12 +671,48 @@
     <p id="loadingText" style="margin-top:10px; color: var(--vscode-descriptionForeground);">Searching...</p>
   </div>
 
+  <!-- ============ MARKDOWN + SYNTAX HIGHLIGHT LIBS ============ -->
+  <script nonce="${nonce}" src="${markedUri}"></script>
+  <script nonce="${nonce}" src="${prismJsUri}"></script>
+  <script nonce="${nonce}" src="${prismCUri}"></script>
+  <script nonce="${nonce}" src="${prismCppUri}"></script>
+  <script nonce="${nonce}" src="${prismTsUri}"></script>
+  <script nonce="${nonce}" src="${prismJsonUri}"></script>
+  <script nonce="${nonce}" src="${prismXmlUri}"></script>
+
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
 
     // ============ STATE ============
     let currentResults = null;
     let batchQueue = [];
+
+    // ============ LIVE STREAM STATE ============
+    let streamBuffer = '';
+    let streamRenderPending = false;
+
+    function appendStreamChunk(chunk) {
+      streamBuffer += chunk;
+      // Show the stream section as soon as first chunk arrives
+      const section = $('liveStreamSection');
+      if (!section.classList.contains('visible')) {
+        section.classList.add('visible');
+        $('streamCursor').style.display = '';
+      }
+      // Throttle DOM updates with requestAnimationFrame to avoid reflow on every token
+      if (!streamRenderPending) {
+        streamRenderPending = true;
+        requestAnimationFrame(() => {
+          const body = $('liveStreamBody');
+          if (body) {
+            body.innerHTML = renderMarkdown(streamBuffer);
+            // Auto-scroll to bottom as new content arrives
+            body.scrollTop = body.scrollHeight;
+          }
+          streamRenderPending = false;
+        });
+      }
+    }
 
     // ============ ELEMENTS ============
     const $ = (id) => document.getElementById(id);
@@ -1501,96 +1622,52 @@
       return parts.length > 2 ? parts.slice(-2).join('/') : p;
     }
 
+    // ============ MARKED + PRISM INIT ============
+    (function initMarkdown() {
+      if (typeof marked === 'undefined') return;
+
+      // Custom renderer: use Prism for fenced code blocks
+      marked.use({
+        gfm: true,
+        breaks: false,
+        renderer: {
+          code({ text, lang }) {
+            const rawLang = (lang || '').split(/\s+/)[0].toLowerCase();
+            if (typeof Prism !== 'undefined' && rawLang && Prism.languages[rawLang]) {
+              const highlighted = Prism.highlight(text, Prism.languages[rawLang], rawLang);
+              return '<pre class="language-' + rawLang + '"><code class="language-' + rawLang + '">'
+                + highlighted + '</code></pre>';
+            }
+            // Fallback: escape and wrap
+            const d = document.createElement('div');
+            d.textContent = text;
+            return '<pre><code>' + d.innerHTML + '</code></pre>';
+          }
+        }
+      });
+    })();
+
     /**
-     * Lightweight markdown-to-HTML renderer for the answer section.
-     * Supports: headers, bold, italic, inline code, code blocks, lists, blockquotes, file path links.
+     * Render markdown to HTML using marked + Prism.
+     * Falls back to basic escaping if marked is not loaded.
      */
     function renderMarkdown(md) {
       if (!md) return '';
-      let html = escHtml(md);
 
-      // Code blocks (``` ... ```)
-      html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function(_, lang, code) {
-        return '<pre><code>' + code + '</code></pre>';
-      });
+      if (typeof marked !== 'undefined') {
+        let html = marked.parse(md);
+        // Post-process: make file:line references clickable
+        html = html.replace(/((?:[\w\-]+\/)*[\w\-]+\.\w{1,6}):(\d+)/g, function(match, file, line) {
+          if (/\.(c|h|cpp|hpp|py|ts|js|java|rs|go|xml|json|yaml|yml|cfg|arxml)$/i.test(file)) {
+            return '<a class="file-ref" data-file="' + escAttr(file) + '" data-line="' + line + '">' + escHtml(file) + ':' + line + '</a>';
+          }
+          return match;
+        });
+        return html;
+      }
 
-      // Inline code (`...`)
-      html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-      // Headers (### → h4, ## → h3, # → h2)
-      html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
-      html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-      html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-      html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-
-      // Bold (**text**)
-      html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-
-      // Italic (*text*)
-      html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-
-      // Blockquotes (> text)
-      html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
-
-      // Unordered lists (- item or * item)
-      html = html.replace(/^[\-\*] (.+)$/gm, '<li>$1</li>');
-      html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
-
-      // Ordered lists (1. item)
-      html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
-
-      // Markdown tables
-      html = html.replace(/((?:^\|.+\|$\n?){2,})/gm, function(tableBlock) {
-        const rows = tableBlock.trim().split('\n').filter(r => r.trim());
-        if (rows.length < 2) return tableBlock;
-        // Check if 2nd row is separator (|---|---|)
-        if (!/^\|[\s\-:]+(\|[\s\-:]+)+\|?$/.test(rows[1])) return tableBlock;
-
-        let thtml = '<table class="md-table">';
-        // Header row
-        const hCells = rows[0].split('|').filter((c, i, a) => i > 0 && i < a.length - 1);
-        thtml += '<thead><tr>' + hCells.map(c => '<th>' + c.trim() + '</th>').join('') + '</tr></thead>';
-        // Data rows (skip separator at index 1)
-        thtml += '<tbody>';
-        for (let i = 2; i < rows.length; i++) {
-          const cells = rows[i].split('|').filter((c, idx, a) => idx > 0 && idx < a.length - 1);
-          thtml += '<tr>' + cells.map(c => '<td>' + c.trim() + '</td>').join('') + '</tr>';
-        }
-        thtml += '</tbody></table>';
-        return thtml;
-      });
-
-      // File paths as clickable links: path/to/file.c:123 or path/to/file.c
-      html = html.replace(/([\w\/\.\-]+\.\w{1,4}):(\d+)/g, function(match, file, line) {
-        if (/\.(c|h|cpp|hpp|py|ts|js|java|rs|go|xml|json|yaml|yml|cfg|arxml)$/i.test(file)) {
-          return '<a class="file-ref" data-file="' + file + '" data-line="' + line + '">' + file + ':' + line + '</a>';
-        }
-        return match;
-      });
-
-      // Paragraphs — convert double newlines to paragraph breaks
-      html = html.replace(/\n{2,}/g, '</p><p>');
-      // Single newlines to <br> (except inside block elements)
-      html = html.replace(/\n/g, '<br>');
-
-      // Wrap in paragraph
-      html = '<p>' + html + '</p>';
-
-      // Clean up empty paragraphs
-      html = html.replace(/<p>\s*<\/p>/g, '');
-      // Fix nested block elements inside <p>
-      html = html.replace(/<p>(<h[1-4]>)/g, '$1');
-      html = html.replace(/(<\/h[1-4]>)<\/p>/g, '$1');
-      html = html.replace(/<p>(<ul>)/g, '$1');
-      html = html.replace(/(<\/ul>)<\/p>/g, '$1');
-      html = html.replace(/<p>(<pre>)/g, '$1');
-      html = html.replace(/(<\/pre>)<\/p>/g, '$1');
-      html = html.replace(/<p>(<blockquote>)/g, '$1');
-      html = html.replace(/(<\/blockquote>)<\/p>/g, '$1');
-      html = html.replace(/<p>(<table)/g, '$1');
-      html = html.replace(/(<\/table>)<\/p>/g, '$1');
-
-      return html;
+      // Fallback: plain text only
+      return '<p>' + escHtml(md).replace(/\n/g, '<br>') + '</p>';
     }
 
     function bindFileLinks(container) {
@@ -1688,11 +1765,26 @@
           break;
         case 'searchStarted':
           showLoading('Searching...');
+          // Reset stream section for new search
+          streamBuffer = '';
+          streamRenderPending = false;
+          $('liveStreamBody').innerHTML = '';
+          $('liveStreamSection').classList.remove('visible');
+          $('streamCursor').style.display = '';
           break;
         case 'searchProgress':
           $('loadingText').textContent = msg.phase + (msg.detail ? ': ' + msg.detail : '');
+          // When narrative generation starts, show the stream section
+          if (msg.phase && (msg.phase.includes('narrative') || msg.phase.includes('Generating'))) {
+            $('liveStreamSection').classList.add('visible');
+          }
+          break;
+        case 'answerChunk':
+          appendStreamChunk(msg.chunk);
           break;
         case 'searchResults':
+          // Hide cursor to indicate streaming is done
+          $('streamCursor').style.display = 'none';
           renderResults(msg.results);
           break;
         case 'batchProgress':

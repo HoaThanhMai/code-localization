@@ -8,7 +8,7 @@ export const AGENT_CONFIG = {
   /** Default turn budgets per query type when LLM doesn't provide an estimate */
   defaultIterations: {
     search: 3,
-    bug_analysis: 5,
+    bug_analysis: 6,
     impact: 6,
   } as Record<string, number>,
 

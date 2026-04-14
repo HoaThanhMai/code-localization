@@ -38,7 +38,10 @@ export class CodeLocatorPanel {
       {
         enableScripts: true,
         retainContextWhenHidden: true,
-        localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'src', 'webview', 'webview-ui')]
+        localResourceRoots: [
+          vscode.Uri.joinPath(extensionUri, 'src', 'webview', 'webview-ui'),
+          vscode.Uri.joinPath(extensionUri, 'media')
+        ]
       }
     );
 
@@ -187,7 +190,10 @@ export class CodeLocatorPanel {
       const results = await this._queryEngine.search(query, queryType, {
         onProgress: (phase, detail) => {
           this._postMessage({ type: 'searchProgress', phase, detail });
-        }
+        },
+        onAnswerChunk: (chunk) => {
+          this._postMessage({ type: 'answerChunk', chunk });
+        },
       });
       this._postMessage({ type: 'searchResults', results });
     } catch (e: any) {
@@ -339,8 +345,21 @@ export class CodeLocatorPanel {
     const nonce = getNonce();
     const cspSource = this._panel.webview.cspSource;
 
+    const mediaUri = (file: string) =>
+      this._panel.webview.asWebviewUri(
+        vscode.Uri.joinPath(this._extensionUri, 'media', file)
+      ).toString();
+
     html = html.replace(/\$\{nonce\}/g, nonce);
     html = html.replace(/\$\{cspSource\}/g, cspSource);
+    html = html.replace(/\$\{markedUri\}/g, mediaUri('marked.min.js'));
+    html = html.replace(/\$\{prismJsUri\}/g, mediaUri('prism.js'));
+    html = html.replace(/\$\{prismCUri\}/g, mediaUri('prism-c.js'));
+    html = html.replace(/\$\{prismCppUri\}/g, mediaUri('prism-cpp.js'));
+    html = html.replace(/\$\{prismTsUri\}/g, mediaUri('prism-ts.js'));
+    html = html.replace(/\$\{prismJsonUri\}/g, mediaUri('prism-json.js'));
+    html = html.replace(/\$\{prismXmlUri\}/g, mediaUri('prism-xml.js'));
+    html = html.replace(/\$\{prismThemeUri\}/g, mediaUri('prism-theme.css'));
 
     return html;
   }
